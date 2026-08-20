@@ -4,6 +4,7 @@ import type { User } from '@supabase/supabase-js';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
 import CreateProjectModal from '../components/CreateProjectModal';
+import EditProjectModal from '../components/EditProjectModal';
 import ConfirmModal from '../components/ConfirmModal';
 import { ProjectCardSkeleton } from '../components/Skeleton';
 
@@ -15,7 +16,8 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<ProjectWithTasks[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; title: string } | null>(null);
   const navigate = useNavigate();
 
@@ -81,7 +83,7 @@ export default function Dashboard() {
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-sm font-semibold text-slate-700">Seus Projetos ({projects.length})</h2>
           <button
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => setIsCreateModalOpen(true)}
             className="px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
           >
             + Novo Projeto
@@ -90,7 +92,6 @@ export default function Dashboard() {
 
         {loading ? (
           <div className="grid gap-3">
-            <ProjectCardSkeleton />
             <ProjectCardSkeleton />
             <ProjectCardSkeleton />
           </div>
@@ -110,14 +111,14 @@ export default function Dashboard() {
                   key={project.id}
                   className="p-4 bg-white rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between gap-3"
                 >
-                  <div className="flex justify-between items-start">
+                  <div className="flex justify-between items-start gap-3">
                     <div>
                       <h3 className="text-base font-semibold text-slate-800">{project.title}</h3>
                       {project.description && (
                         <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{project.description}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 shrink-0">
                       <Link
                         to={`/dashboard/${project.id}`}
                         className="text-xs text-slate-900 font-medium hover:underline whitespace-nowrap"
@@ -125,8 +126,15 @@ export default function Dashboard() {
                         Ver detalhes →
                       </Link>
                       <button
+                        onClick={() => setProjectToEdit(project)}
+                        className="text-xs text-slate-500 hover:text-slate-800 transition-colors cursor-pointer px-1.5 py-0.5"
+                        title="Editar projeto"
+                      >
+                        Editar
+                      </button>
+                      <button
                         onClick={() => setProjectToDelete({ id: project.id, title: project.title })}
-                        className="text-xs text-slate-400 hover:text-red-600 transition-colors cursor-pointer"
+                        className="text-xs text-slate-400 hover:text-red-600 transition-colors cursor-pointer px-1 py-0.5"
                         title="Excluir projeto"
                       >
                         Excluir
@@ -154,12 +162,19 @@ export default function Dashboard() {
 
       {user && (
         <CreateProjectModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
+          isOpen={isCreateModalOpen}
+          onClose={() => setIsCreateModalOpen(false)}
           onProjectCreated={fetchProjects}
           userId={user.id}
         />
       )}
+
+      <EditProjectModal
+        isOpen={!!projectToEdit}
+        project={projectToEdit}
+        onClose={() => setProjectToEdit(null)}
+        onProjectUpdated={fetchProjects}
+      />
 
       <ConfirmModal
         isOpen={!!projectToDelete}

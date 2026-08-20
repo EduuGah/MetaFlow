@@ -3,18 +3,75 @@ import { useParams, Link } from 'react-router-dom';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
 import ConfirmModal from '../components/ConfirmModal';
+import EditTaskModal from '../components/EditTaskModal';
+import EditProjectModal from '../components/EditProjectModal';
 import { Skeleton, TaskSkeleton } from '../components/Skeleton';
+
+const RECURRENCE_LABELS: Record<string, string> = {
+  '15m': 'A cada 15 min',
+  '30m': 'A cada 30 min',
+  '1h': 'A cada 1 hora',
+  '6h': 'A cada 6 horas',
+  '12h': 'A cada 12 horas',
+  daily: 'Diária',
+  weekly: 'Semanal',
+};
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskRecurrence, setNewTaskRecurrence] = useState<string>('none');
   const [subtaskTitleMap, setSubtaskTitleMap] = useState<Record<string, string>>({});
   const [activeSubtaskInput, setActiveSubtaskInput] = useState<string | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const [isEditProjectOpen, setIsEditProjectOpen] = useState(false);
+  const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
+
+  const checkAndResetRecurrentTasks = useCallback(async (fetchedTasks: Task[]) => {
+    const now = new Date();
+    const tasksToResetIds: string[] = [];
+
+    fetchedTasks.forEach((task) => {
+      if (!task.is_completed || !task.last_completed_at || !task.recurrence || task.recurrence === 'none') {
+        return;
+      }
+
+      const completedDate = new Date(task.last_completed_at);
+      const diffMinutes = (now.getTime() - completedDate.getTime()) / (1000 * 60);
+
+      let shouldReset = false;
+
+      switch (task.recurrence) {
+        case '15m': shouldReset = diffMinutes >= 15; break;
+        case '30m': shouldReset = diffMinutes >= 30; break;
+        case '1h': shouldReset = diffMinutes >= 60; break;
+        case '6h': shouldReset = diffMinutes >= 360; break;
+        case '12h': shouldReset = diffMinutes >= 720; break;
+        case 'daily': shouldReset = diffMinutes >= 1440; break;
+        case 'weekly': shouldReset = diffMinutes >= 10080; break;
+      }
+
+      if (shouldReset) tasksToResetIds.push(task.id);
+    });
+
+    if (tasksToResetIds.length > 0) {
+      await supabase
+        .from('tasks')
+        .update({ is_completed: false })
+        .in('id', tasksToResetIds);
+
+      return fetchedTasks.map((t) =>
+        tasksToResetIds.includes(t.id) ? { ...t, is_completed: false } : t
+      );
+    }
+
+    return fetchedTasks;
+  }, []);
 
   const fetchProjectData = useCallback(async () => {
     if (!id) return;
@@ -28,12 +85,14 @@ export default function ProjectDetail() {
     if (!projectRes.error && projectRes.data) {
       setProject(projectRes.data);
     }
+
     if (!tasksRes.error && tasksRes.data) {
-      setTasks(tasksRes.data);
+      const processedTasks = await checkAndResetRecurrentTasks(tasksRes.data as Task[]);
+      setTasks(processedTasks);
     }
 
     setLoading(false);
-  }, [id]);
+  }, [id, checkAndResetRecurrentTasks]);
 
   useEffect(() => {
     fetchProjectData();
@@ -42,7 +101,7 @@ export default function ProjectDetail() {
   const handleAddMainTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim()) {
-      setTaskError('Informe o título da meta ou tarefa principal.');
+      setTaskError('Informe o título da meta ou tarefa.');
       return;
     }
     if (!id) return;
@@ -53,10 +112,12 @@ export default function ProjectDetail() {
       title: newTaskTitle.trim(),
       is_completed: false,
       parent_id: null,
+      recurrence: newTaskRecurrence,
     });
 
     if (!error) {
       setNewTaskTitle('');
+      setNewTaskRecurrence('none');
       fetchProjectData();
     }
   };
@@ -72,6 +133,7 @@ export default function ProjectDetail() {
       title,
       is_completed: false,
       parent_id: parentId,
+      recurrence: 'none',
     });
 
     if (!error) {
@@ -82,14 +144,20 @@ export default function ProjectDetail() {
 
   const handleToggleTask = async (task: Task) => {
     const nextStatus = !task.is_completed;
+    const nowIso = nextStatus ? new Date().toISOString() : null;
 
     setTasks((prev) =>
-      prev.map((t) => (t.id === task.id ? { ...t, is_completed: nextStatus } : t))
+      prev.map((t) =>
+        t.id === task.id ? { ...t, is_completed: nextStatus, last_completed_at: nowIso } : t
+      )
     );
 
     const { error } = await supabase
       .from('tasks')
-      .update({ is_completed: nextStatus })
+      .update({
+        is_completed: nextStatus,
+        last_completed_at: nowIso,
+      })
       .eq('id', task.id);
 
     if (error) {
@@ -152,10 +220,20 @@ export default function ProjectDetail() {
 
         {/* Card do Projeto */}
         <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs">
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{project.title}</h1>
-          {project.description && (
-            <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">{project.description}</p>
-          )}
+          <div className="flex justify-between items-start gap-4">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{project.title}</h1>
+              {project.description && (
+                <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">{project.description}</p>
+              )}
+            </div>
+            <button
+              onClick={() => setIsEditProjectOpen(true)}
+              className="text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-3 py-1.5 rounded-md transition-colors cursor-pointer shrink-0"
+            >
+              Editar Projeto
+            </button>
+          </div>
 
           <div className="mt-5 pt-4 border-t border-slate-100">
             <div className="flex justify-between text-xs text-slate-600 mb-1.5 font-medium">
@@ -171,15 +249,15 @@ export default function ProjectDetail() {
           </div>
         </div>
 
-        {/* Formulário de Nova Tarefa Principal */}
+        {/* Form de Nova Meta */}
         <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
           <h2 className="text-sm font-semibold text-slate-800">Tarefas & Metas</h2>
 
           <div>
-            <form onSubmit={handleAddMainTask} className="flex gap-2">
+            <form onSubmit={handleAddMainTask} className="flex flex-col sm:flex-row gap-2">
               <input
                 type="text"
-                placeholder="Adicionar nova meta (ex: Implementar módulo de relatórios)..."
+                placeholder="Adicionar nova meta..."
                 value={newTaskTitle}
                 onChange={(e) => {
                   setNewTaskTitle(e.target.value);
@@ -189,9 +267,24 @@ export default function ProjectDetail() {
                   taskError ? 'border-red-400 focus:border-red-600' : 'border-slate-300 focus:border-slate-800'
                 }`}
               />
+              <select
+                value={newTaskRecurrence}
+                onChange={(e) => setNewTaskRecurrence(e.target.value)}
+                className="px-3 py-2.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
+              >
+                <option value="none">Única</option>
+                <option value="15m">A cada 15 min</option>
+                <option value="30m">A cada 30 min</option>
+                <option value="1h">A cada 1 hora</option>
+                <option value="6h">A cada 6 horas</option>
+                <option value="12h">A cada 12 horas</option>
+                <option value="daily">Diária</option>
+                <option value="weekly">Semanal</option>
+              </select>
+
               <button
                 type="submit"
-                className="px-4 py-2.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer active:scale-98"
+                className="px-4 py-2.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer active:scale-98 whitespace-nowrap"
               >
                 Criar Meta
               </button>
@@ -199,7 +292,7 @@ export default function ProjectDetail() {
             {taskError && <p className="text-[11px] text-red-600 mt-1.5 font-medium">{taskError}</p>}
           </div>
 
-          {/* Lista de Tarefas Principais e suas Subtarefas */}
+          {/* Lista de Metas */}
           <div className="space-y-3 pt-2">
             {mainTasks.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-6">Nenhuma meta cadastrada ainda.</p>
@@ -219,13 +312,20 @@ export default function ProjectDetail() {
                           className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer shrink-0"
                         />
                         <div className="min-w-0">
-                          <span
-                            className={`text-sm font-semibold truncate block ${
-                              mainTask.is_completed ? 'line-through text-slate-400' : 'text-slate-800'
-                            }`}
-                          >
-                            {mainTask.title}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-sm font-semibold truncate block ${
+                                mainTask.is_completed ? 'line-through text-slate-400' : 'text-slate-800'
+                              }`}
+                            >
+                              {mainTask.title}
+                            </span>
+                            {mainTask.recurrence && mainTask.recurrence !== 'none' && (
+                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 whitespace-nowrap">
+                                {RECURRENCE_LABELS[mainTask.recurrence] || mainTask.recurrence}
+                              </span>
+                            )}
+                          </div>
                           {subtasks.length > 0 && (
                             <span className="text-[11px] text-slate-500">
                               Etapas: {subtasksCompleted}/{subtasks.length} concluídas
@@ -234,7 +334,7 @@ export default function ProjectDetail() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() =>
@@ -243,6 +343,17 @@ export default function ProjectDetail() {
                           className="text-[11px] font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
                         >
                           + Subtarefa
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setTaskToEdit(mainTask)}
+                          className="text-slate-400 hover:text-slate-800 p-1 cursor-pointer shrink-0"
+                          title="Editar meta"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
                         </button>
 
                         <button
@@ -265,7 +376,7 @@ export default function ProjectDetail() {
                       >
                         <input
                           type="text"
-                          placeholder="Adicionar subtarefa (ex: Criar rotas no backend)..."
+                          placeholder="Adicionar subtarefa..."
                           value={subtaskTitleMap[mainTask.id] || ''}
                           onChange={(e) =>
                             setSubtaskTitleMap((prev) => ({ ...prev, [mainTask.id]: e.target.value }))
@@ -304,16 +415,28 @@ export default function ProjectDetail() {
                               </span>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => setTaskToDelete({ id: subtask.id, title: subtask.title })}
-                              className="text-slate-300 hover:text-red-600 p-1 cursor-pointer"
-                              title="Excluir subtarefa"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                              </svg>
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setTaskToEdit(subtask)}
+                                className="text-slate-300 hover:text-slate-700 p-1 cursor-pointer"
+                                title="Editar subtarefa"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTaskToDelete({ id: subtask.id, title: subtask.title })}
+                                className="text-slate-300 hover:text-red-600 p-1 cursor-pointer"
+                                title="Excluir subtarefa"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -325,6 +448,20 @@ export default function ProjectDetail() {
           </div>
         </div>
       </div>
+
+      <EditProjectModal
+        isOpen={isEditProjectOpen}
+        project={project}
+        onClose={() => setIsEditProjectOpen(false)}
+        onProjectUpdated={fetchProjectData}
+      />
+
+      <EditTaskModal
+        isOpen={!!taskToEdit}
+        task={taskToEdit}
+        onClose={() => setTaskToEdit(null)}
+        onTaskUpdated={fetchProjectData}
+      />
 
       <ConfirmModal
         isOpen={!!taskToDelete}
