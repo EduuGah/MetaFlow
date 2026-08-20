@@ -10,6 +10,7 @@ export default function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [taskError, setTaskError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
 
@@ -38,7 +39,15 @@ export default function ProjectDetail() {
 
   const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTaskTitle.trim() || !id) return;
+    
+    if (!newTaskTitle.trim()) {
+      setTaskError('Informe uma descrição para a tarefa antes de adicionar.');
+      return;
+    }
+
+    if (!id) return;
+
+    setTaskError(null);
 
     const { error } = await supabase.from('tasks').insert({
       project_id: id,
@@ -150,21 +159,33 @@ export default function ProjectDetail() {
         <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
           <h2 className="text-sm font-semibold text-slate-800">Tarefas & Checklist</h2>
 
-          <form onSubmit={handleAddTask} className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Adicionar nova etapa..."
-              value={newTaskTitle}
-              onChange={(e) => setNewTaskTitle(e.target.value)}
-              className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:border-slate-800"
-            />
-            <button
-              type="submit"
-              className="px-4 py-2 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
-            >
-              Adicionar
-            </button>
-          </form>
+          <div>
+            <form onSubmit={handleAddTask} className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Adicionar nova etapa..."
+                value={newTaskTitle}
+                onChange={(e) => {
+                  setNewTaskTitle(e.target.value);
+                  if (taskError) setTaskError(null);
+                }}
+                className={`flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none transition-colors ${
+                  taskError 
+                    ? 'border-red-400 focus:border-red-600' 
+                    : 'border-slate-300 focus:border-slate-800'
+                }`}
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Adicionar
+              </button>
+            </form>
+            {taskError && (
+              <p className="text-[11px] text-red-600 mt-1.5 font-medium">{taskError}</p>
+            )}
+          </div>
 
           <div className="space-y-2 pt-2">
             {tasks.length === 0 ? (
