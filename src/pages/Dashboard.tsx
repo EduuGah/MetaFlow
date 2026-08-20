@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { User } from '@supabase/supabase-js';
 import type { Project, Task } from '../types';
@@ -9,6 +9,8 @@ import ConfirmModal from '../components/ConfirmModal';
 import DashboardStats from '../components/DashboardStats';
 import { ProjectCardSkeleton } from '../components/Skeleton';
 
+const DEFAULT_CATEGORIES = ['Geral', 'Trabalho', 'Estudos', 'Saúde', 'Pessoal', 'Projetos'];
+
 interface ProjectWithTasks extends Project {
   tasks: Task[];
 }
@@ -17,6 +19,8 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<ProjectWithTasks[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
+
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; title: string } | null>(null);
@@ -61,6 +65,21 @@ export default function Dashboard() {
     setProjectToDelete(null);
   };
 
+  const existingCategories = useMemo(() => {
+    const set = new Set<string>(DEFAULT_CATEGORIES);
+    projects.forEach((p) => {
+      if (p.category) set.add(p.category);
+    });
+    return Array.from(set);
+  }, [projects]);
+
+  const filterChips = useMemo(() => ['Todas', ...existingCategories], [existingCategories]);
+
+  const filteredProjects = useMemo(() => {
+    if (selectedCategory === 'Todas') return projects;
+    return projects.filter((p) => (p.category || 'Geral') === selectedCategory);
+  }, [projects, selectedCategory]);
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
       <header className="max-w-4xl mx-auto flex justify-between items-center mb-6 pb-4 border-b border-slate-200">
@@ -85,28 +104,49 @@ export default function Dashboard() {
           <DashboardStats projects={projects} />
         )}
 
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-sm font-semibold text-slate-700">Seus Projetos ({projects.length})</h2>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
+          <h2 className="text-sm font-semibold text-slate-700">Seus Projetos ({filteredProjects.length})</h2>
+
           <button
             onClick={() => setIsCreateModalOpen(true)}
-            className="px-3.5 py-2 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
+            className="px-3.5 py-2 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer self-start sm:self-auto"
           >
             + Novo Projeto
           </button>
         </div>
+
+        {!loading && projects.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+            {filterChips.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-3 py-1 rounded-full border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  selectedCategory === cat
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        )}
 
         {loading ? (
           <div className="grid gap-3">
             <ProjectCardSkeleton />
             <ProjectCardSkeleton />
           </div>
-        ) : projects.length === 0 ? (
+        ) : filteredProjects.length === 0 ? (
           <div className="p-8 text-center bg-white rounded-lg border border-slate-200 text-xs text-slate-500">
-            Nenhum projeto encontrado. Clique em "+ Novo Projeto" para começar.
+            {selectedCategory !== 'Todas'
+              ? `Nenhum projeto encontrado na categoria "${selectedCategory}".`
+              : 'Nenhum projeto encontrado. Clique em "+ Novo Projeto" para começar.'}
           </div>
         ) : (
           <div className="grid gap-3">
-            {projects.map((project) => {
+            {filteredProjects.map((project) => {
               const totalTasks = project.tasks?.length || 0;
               const completedTasks = project.tasks?.filter((t) => t.is_completed).length || 0;
               const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
@@ -117,12 +157,18 @@ export default function Dashboard() {
                   className="p-4 bg-white rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between gap-3"
                 >
                   <div className="flex justify-between items-start gap-3">
-                    <div>
-                      <h3 className="text-base font-semibold text-slate-800">{project.title}</h3>
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-semibold text-slate-800 truncate">{project.title}</h3>
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                          {project.category || 'Geral'}
+                        </span>
+                      </div>
                       {project.description && (
-                        <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{project.description}</p>
+                        <p className="text-xs text-slate-500 line-clamp-1">{project.description}</p>
                       )}
                     </div>
+
                     <div className="flex items-center gap-2 shrink-0">
                       <Link
                         to={`/dashboard/${project.id}`}
@@ -168,6 +214,7 @@ export default function Dashboard() {
       {user && (
         <CreateProjectModal
           isOpen={isCreateModalOpen}
+          existingCategories={existingCategories}
           onClose={() => setIsCreateModalOpen(false)}
           onProjectCreated={fetchProjects}
           userId={user.id}
@@ -177,6 +224,7 @@ export default function Dashboard() {
       <EditProjectModal
         isOpen={!!projectToEdit}
         project={projectToEdit}
+        existingCategories={existingCategories}
         onClose={() => setProjectToEdit(null)}
         onProjectUpdated={fetchProjects}
       />

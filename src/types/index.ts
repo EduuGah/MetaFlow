@@ -3,6 +3,7 @@ export interface Project {
   user_id: string;
   title: string;
   description: string | null;
+  category?: string;
   deadline: string | null;
   created_at: string;
 }

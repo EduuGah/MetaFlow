@@ -36,7 +36,7 @@ export default function ProjectDetail() {
   const [subtaskTitleMap, setSubtaskTitleMap] = useState<Record<string, string>>({});
   const [activeSubtaskInput, setActiveSubtaskInput] = useState<string | null>(null);
   const [expandedKanbanTasks, setExpandedKanbanTasks] = useState<Record<string, boolean>>({});
-
+  
   // Filtros
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
@@ -294,8 +294,13 @@ export default function ProjectDetail() {
         {/* Card do Projeto */}
         <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs">
           <div className="flex justify-between items-start gap-4">
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{project.title}</h1>
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{project.title}</h1>
+                <span className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
+                  {project.category || 'Geral'}
+                </span>
+              </div>
               {project.description && (
                 <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">{project.description}</p>
               )}
