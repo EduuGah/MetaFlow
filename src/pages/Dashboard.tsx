@@ -3,30 +3,67 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { User } from '@supabase/supabase-js';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
-import { useToast } from '../context/ToastContext';
 import CreateProjectModal from '../components/CreateProjectModal';
 import EditProjectModal from '../components/EditProjectModal';
 import ConfirmModal from '../components/ConfirmModal';
 import DashboardStats from '../components/DashboardStats';
 import { ProjectCardSkeleton } from '../components/Skeleton';
+import { useToast } from '../context/ToastContext';
 
 const DEFAULT_CATEGORIES = ['Geral', 'Trabalho', 'Estudos', 'Saúde', 'Pessoal', 'Projetos'];
+
+type DeadlineFilter = 'all' | 'overdue' | 'today' | 'upcoming' | 'no_deadline';
 
 interface ProjectWithTasks extends Project {
   tasks: Task[];
 }
 
+// Utilitário para classificar o prazo do projeto
+function getDeadlineStatus(deadlineStr: string | null): {
+  status: 'overdue' | 'today' | 'upcoming' | 'none';
+  label: string;
+  style: string;
+} {
+  if (!deadlineStr) {
+    return { status: 'none', label: 'Sem prazo', style: 'bg-slate-100 text-slate-500 border-slate-200' };
+  }
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  // Trata 'YYYY-MM-DD' em horário local
+  const [year, month, day] = deadlineStr.split('-').map(Number);
+  const deadlineDate = new Date(year, month - 1, day);
+
+  const diffTime = deadlineDate.getTime() - today.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return { status: 'overdue', label: 'Atrasado', style: 'bg-red-50 text-red-700 border-red-200 font-semibold' };
+  }
+  if (diffDays === 0) {
+    return { status: 'today', label: 'Vence Hoje', style: 'bg-amber-50 text-amber-800 border-amber-300 font-semibold' };
+  }
+  if (diffDays <= 7) {
+    return { status: 'upcoming', label: `Em ${diffDays}d`, style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+  }
+
+  return { status: 'upcoming', label: deadlineDate.toLocaleDateString('pt-BR'), style: 'bg-slate-100 text-slate-600 border-slate-200' };
+}
+
 export default function Dashboard() {
-  const { showToast } = useToast();
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<ProjectWithTasks[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
+  const [selectedDeadlineFilter, setSelectedDeadlineFilter] = useState<DeadlineFilter>('all');
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; title: string } | null>(null);
+  
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   const fetchProjects = useCallback(async () => {
     setLoading(true);
@@ -61,11 +98,11 @@ export default function Dashboard() {
 
     const { error } = await supabase.from('projects').delete().eq('id', targetId);
 
-    if (!error) {
-      showToast('Projeto excluído com sucesso!', 'success');
-    } else {
-      showToast('Erro ao excluir projeto.', 'error');
+    if (error) {
       fetchProjects();
+      showToast('Erro ao excluir projeto.', 'error');
+    } else {
+      showToast('Projeto excluído com sucesso.', 'info');
     }
     setProjectToDelete(null);
   };
@@ -80,10 +117,41 @@ export default function Dashboard() {
 
   const filterChips = useMemo(() => ['Todas', ...existingCategories], [existingCategories]);
 
+  // Contagem para badges de filtro de prazo
+  const deadlineCounts = useMemo(() => {
+    let overdue = 0;
+    let today = 0;
+    let upcoming = 0;
+
+    projects.forEach((p) => {
+      const { status } = getDeadlineStatus(p.deadline);
+      if (status === 'overdue') overdue++;
+      else if (status === 'today') today++;
+      else if (status === 'upcoming') upcoming++;
+    });
+
+    return { overdue, today, upcoming };
+  }, [projects]);
+
   const filteredProjects = useMemo(() => {
-    if (selectedCategory === 'Todas') return projects;
-    return projects.filter((p) => (p.category || 'Geral') === selectedCategory);
-  }, [projects, selectedCategory]);
+    return projects.filter((p) => {
+      // Filtro de Categoria
+      if (selectedCategory !== 'Todas' && (p.category || 'Geral') !== selectedCategory) {
+        return false;
+      }
+
+      // Filtro de Prazo
+      if (selectedDeadlineFilter !== 'all') {
+        const { status } = getDeadlineStatus(p.deadline);
+        if (selectedDeadlineFilter === 'overdue' && status !== 'overdue') return false;
+        if (selectedDeadlineFilter === 'today' && status !== 'today') return false;
+        if (selectedDeadlineFilter === 'upcoming' && status !== 'upcoming') return false;
+        if (selectedDeadlineFilter === 'no_deadline' && p.deadline) return false;
+      }
+
+      return true;
+    });
+  }, [projects, selectedCategory, selectedDeadlineFilter]);
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
@@ -120,21 +188,84 @@ export default function Dashboard() {
           </button>
         </div>
 
+        {/* Filtros e Controles */}
         {!loading && projects.length > 0 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-            {filterChips.map((cat) => (
+          <div className="space-y-2 bg-white p-3 rounded-lg border border-slate-200 shadow-2xs">
+            {/* Seleção de Prazo */}
+            <div className="flex items-center gap-2 flex-wrap text-xs">
+              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider shrink-0">Prazo:</span>
               <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1 rounded-full border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                  selectedCategory === cat
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                onClick={() => setSelectedDeadlineFilter('all')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                  selectedDeadlineFilter === 'all'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                {cat}
+                Todos
               </button>
-            ))}
+              
+              <button
+                onClick={() => setSelectedDeadlineFilter('overdue')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                  selectedDeadlineFilter === 'overdue'
+                    ? 'bg-red-700 text-white'
+                    : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                }`}
+              >
+                <span>Atrasados</span>
+                {deadlineCounts.overdue > 0 && (
+                  <span className="bg-red-200 text-red-900 text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                    {deadlineCounts.overdue}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setSelectedDeadlineFilter('today')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                  selectedDeadlineFilter === 'today'
+                    ? 'bg-amber-700 text-white'
+                    : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
+                }`}
+              >
+                <span>Vencem Hoje</span>
+                {deadlineCounts.today > 0 && (
+                  <span className="bg-amber-200 text-amber-900 text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                    {deadlineCounts.today}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setSelectedDeadlineFilter('upcoming')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                  selectedDeadlineFilter === 'upcoming'
+                    ? 'bg-emerald-700 text-white'
+                    : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+                }`}
+              >
+                Próximos
+              </button>
+            </div>
+
+            {/* Chips de Categoria */}
+            <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto text-xs">
+              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider shrink-0">Área:</span>
+              {filterChips.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-2.5 py-0.5 rounded-full border text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                    selectedCategory === cat
+                      ? 'bg-slate-800 text-white border-slate-800'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -145,9 +276,7 @@ export default function Dashboard() {
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="p-8 text-center bg-white rounded-lg border border-slate-200 text-xs text-slate-500">
-            {selectedCategory !== 'Todas'
-              ? `Nenhum projeto encontrado na categoria "${selectedCategory}".`
-              : 'Nenhum projeto encontrado. Clique em "+ Novo Projeto" para começar.'}
+            Nenhum projeto encontrado com os filtros de categoria e prazo selecionados.
           </div>
         ) : (
           <div className="grid gap-3">
@@ -155,20 +284,27 @@ export default function Dashboard() {
               const totalTasks = project.tasks?.length || 0;
               const completedTasks = project.tasks?.filter((t) => t.is_completed).length || 0;
               const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+              const deadlineInfo = getDeadlineStatus(project.deadline);
 
               return (
                 <div
                   key={project.id}
-                  className="p-4 bg-white rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between gap-3"
+                  className="p-4 bg-white rounded-lg border border-slate-200 shadow-2xs flex flex-col justify-between gap-3"
                 >
                   <div className="flex justify-between items-start gap-3">
                     <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-semibold text-slate-800 truncate">{project.title}</h3>
+                        
                         <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
                           {project.category || 'Geral'}
                         </span>
+
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border shrink-0 ${deadlineInfo.style}`}>
+                          Prazo: {deadlineInfo.label}
+                        </span>
                       </div>
+                      
                       {project.description && (
                         <p className="text-xs text-slate-500 line-clamp-1">{project.description}</p>
                       )}
@@ -221,7 +357,10 @@ export default function Dashboard() {
           isOpen={isCreateModalOpen}
           existingCategories={existingCategories}
           onClose={() => setIsCreateModalOpen(false)}
-          onProjectCreated={fetchProjects}
+          onProjectCreated={() => {
+            fetchProjects();
+            showToast('Projeto criado com sucesso!', 'success');
+          }}
           userId={user.id}
         />
       )}
@@ -231,7 +370,10 @@ export default function Dashboard() {
         project={projectToEdit}
         existingCategories={existingCategories}
         onClose={() => setProjectToEdit(null)}
-        onProjectUpdated={fetchProjects}
+        onProjectUpdated={() => {
+          fetchProjects();
+          showToast('Projeto atualizado com sucesso!', 'success');
+        }}
       />
 
       <ConfirmModal
