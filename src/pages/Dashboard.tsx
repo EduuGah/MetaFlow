@@ -4,6 +4,7 @@ import type { User } from '@supabase/supabase-js';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
 import CreateProjectModal from '../components/CreateProjectModal';
+import ConfirmModal from '../components/ConfirmModal';
 
 interface ProjectWithTasks extends Project {
   tasks: Pick<Task, 'id' | 'is_completed'>[];
@@ -14,6 +15,7 @@ export default function Dashboard() {
   const [projects, setProjects] = useState<ProjectWithTasks[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<{ id: string; title: string } | null>(null);
   const navigate = useNavigate();
 
   const fetchProjects = useCallback(async () => {
@@ -41,16 +43,18 @@ export default function Dashboard() {
     navigate('/login');
   };
 
-  const handleDeleteProject = async (projectId: string, title: string) => {
-    if (!window.confirm(`Deseja realmente excluir o projeto "${title}"?`)) return;
+  const confirmDeleteProject = async () => {
+    if (!projectToDelete) return;
+    const targetId = projectToDelete.id;
 
-    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setProjects((prev) => prev.filter((p) => p.id !== targetId));
 
-    const { error } = await supabase.from('projects').delete().eq('id', projectId);
+    const { error } = await supabase.from('projects').delete().eq('id', targetId);
 
     if (error) {
       fetchProjects();
     }
+    setProjectToDelete(null);
   };
 
   return (
@@ -116,7 +120,7 @@ export default function Dashboard() {
                         Ver detalhes →
                       </Link>
                       <button
-                        onClick={() => handleDeleteProject(project.id, project.title)}
+                        onClick={() => setProjectToDelete({ id: project.id, title: project.title })}
                         className="text-xs text-slate-400 hover:text-red-600 transition-colors cursor-pointer"
                         title="Excluir projeto"
                       >
@@ -125,7 +129,6 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Barra e status de progresso */}
                   <div className="pt-2 border-t border-slate-100 flex items-center gap-3">
                     <div className="flex-1 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                       <div
@@ -152,6 +155,16 @@ export default function Dashboard() {
           userId={user.id}
         />
       )}
+
+      <ConfirmModal
+        isOpen={!!projectToDelete}
+        title="Excluir Projeto"
+        message={`Tem certeza que deseja excluir "${projectToDelete?.title}"? Esta ação removerá o projeto e todas as suas tarefas permanentemente.`}
+        confirmText="Excluir"
+        isDestructive={true}
+        onConfirm={confirmDeleteProject}
+        onClose={() => setProjectToDelete(null)}
+      />
     </div>
   );
 }

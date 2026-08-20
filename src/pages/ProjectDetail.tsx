@@ -1,26 +1,24 @@
-import { useEffect, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
-import type { Project, Task } from "../types";
-import { supabase } from "../lib/supabase";
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import type { Project, Task } from '../types';
+import { supabase } from '../lib/supabase';
+import ConfirmModal from '../components/ConfirmModal';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskTitle, setNewTaskTitle] = useState('');
   const [loading, setLoading] = useState(true);
+  const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
 
   const fetchProjectData = useCallback(async () => {
     if (!id) return;
     setLoading(true);
 
     const [projectRes, tasksRes] = await Promise.all([
-      supabase.from("projects").select("*").eq("id", id).single(),
-      supabase
-        .from("tasks")
-        .select("*")
-        .eq("project_id", id)
-        .order("created_at", { ascending: true }),
+      supabase.from('projects').select('*').eq('id', id).single(),
+      supabase.from('tasks').select('*').eq('project_id', id).order('created_at', { ascending: true }),
     ]);
 
     if (!projectRes.error && projectRes.data) {
@@ -41,55 +39,49 @@ export default function ProjectDetail() {
     e.preventDefault();
     if (!newTaskTitle.trim() || !id) return;
 
-    const { error } = await supabase.from("tasks").insert({
+    const { error } = await supabase.from('tasks').insert({
       project_id: id,
       title: newTaskTitle.trim(),
       is_completed: false,
     });
 
     if (!error) {
-      setNewTaskTitle("");
+      setNewTaskTitle('');
       fetchProjectData();
     }
   };
 
   const handleToggleTask = async (taskId: string, currentStatus: boolean) => {
     setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId ? { ...t, is_completed: !currentStatus } : t,
-      ),
+      prev.map((t) => (t.id === taskId ? { ...t, is_completed: !currentStatus } : t))
     );
 
     const { error } = await supabase
-      .from("tasks")
+      .from('tasks')
       .update({ is_completed: !currentStatus })
-      .eq("id", taskId);
+      .eq('id', taskId);
 
     if (error) {
       fetchProjectData();
     }
   };
 
-  const handleDeleteTask = async (taskId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const task = tasks.find((t) => t.id === taskId);
-    if (
-      !task ||
-      !window.confirm(`Deseja realmente excluir a tarefa "${task.title}"?`)
-    )
-      return;
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+  const confirmDeleteTask = async () => {
+    if (!taskToDelete) return;
+    const targetId = taskToDelete.id;
 
-    const { error } = await supabase.from("tasks").delete().eq("id", taskId);
+    setTasks((prev) => prev.filter((t) => t.id !== targetId));
+
+    const { error } = await supabase.from('tasks').delete().eq('id', targetId);
 
     if (error) {
       fetchProjectData();
     }
+    setTaskToDelete(null);
   };
 
   const completedCount = tasks.filter((t) => t.is_completed).length;
-  const progressPercentage =
-    tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+  const progressPercentage = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
   if (loading) {
     return (
@@ -103,10 +95,7 @@ export default function ProjectDetail() {
     return (
       <div className="min-h-screen bg-slate-50 p-6 text-center text-slate-600">
         <p className="text-sm">Projeto não encontrado.</p>
-        <Link
-          to="/dashboard"
-          className="text-xs text-slate-900 underline mt-2 inline-block"
-        >
+        <Link to="/dashboard" className="text-xs text-slate-900 underline mt-2 inline-block">
           Voltar ao Dashboard
         </Link>
       </div>
@@ -116,10 +105,7 @@ export default function ProjectDetail() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 text-slate-800">
       <div className="max-w-3xl mx-auto space-y-6">
-        <Link
-          to="/dashboard"
-          className="text-xs text-slate-500 hover:text-slate-800 transition-colors inline-block"
-        >
+        <Link to="/dashboard" className="text-xs text-slate-500 hover:text-slate-800 transition-colors inline-block">
           ← Voltar ao Dashboard
         </Link>
 
@@ -144,9 +130,7 @@ export default function ProjectDetail() {
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
-          <h2 className="text-sm font-semibold text-slate-800">
-            Tarefas & Checklist
-          </h2>
+          <h2 className="text-sm font-semibold text-slate-800">Tarefas & Checklist</h2>
 
           <form onSubmit={handleAddTask} className="flex gap-2">
             <input
@@ -166,9 +150,7 @@ export default function ProjectDetail() {
 
           <div className="space-y-2 pt-2">
             {tasks.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-4">
-                Nenhuma tarefa criada ainda.
-              </p>
+              <p className="text-xs text-slate-400 text-center py-4">Nenhuma tarefa criada ainda.</p>
             ) : (
               tasks.map((task) => (
                 <div
@@ -185,16 +167,17 @@ export default function ProjectDetail() {
                     />
                     <span
                       className={`text-sm ${
-                        task.is_completed
-                          ? "line-through text-slate-400"
-                          : "text-slate-700 font-medium"
+                        task.is_completed ? 'line-through text-slate-400' : 'text-slate-700 font-medium'
                       }`}
                     >
                       {task.title}
                     </span>
                   </div>
                   <button
-                    onClick={(e) => handleDeleteTask(task.id, e)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTaskToDelete({ id: task.id, title: task.title });
+                    }}
                     className="text-xs text-slate-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer px-2 py-1"
                     title="Excluir tarefa"
                   >
@@ -206,6 +189,16 @@ export default function ProjectDetail() {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={!!taskToDelete}
+        title="Excluir Tarefa"
+        message={`Deseja realmente remover a tarefa "${taskToDelete?.title}"?`}
+        confirmText="Excluir"
+        isDestructive={true}
+        onConfirm={confirmDeleteTask}
+        onClose={() => setTaskToDelete(null)}
+      />
     </div>
   );
 }
