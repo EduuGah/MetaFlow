@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useToast } from '../context/ToastContext';
 
 interface CreateProjectModalProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export default function CreateProjectModal({
   onProjectCreated,
   userId,
 }: CreateProjectModalProps) {
+  const { showToast } = useToast();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [categorySelect, setCategorySelect] = useState('Geral');
@@ -48,6 +50,7 @@ export default function CreateProjectModal({
     setLoading(false);
 
     if (!error) {
+      showToast('Projeto criado com sucesso!', 'success');
       setTitle('');
       setDescription('');
       setCategorySelect('Geral');
@@ -55,6 +58,8 @@ export default function CreateProjectModal({
       setDeadline('');
       onProjectCreated();
       onClose();
+    } else {
+      showToast('Erro ao criar projeto.', 'error');
     }
   };
 

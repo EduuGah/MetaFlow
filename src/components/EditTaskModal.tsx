@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Task } from '../types';
+import { useToast } from '../context/ToastContext';
 
 interface EditTaskModalProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ export default function EditTaskModal({
   onClose,
   onTaskUpdated,
 }: EditTaskModalProps) {
+  const { showToast } = useToast();
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [recurrence, setRecurrence] = useState<string>('none');
@@ -48,8 +50,11 @@ export default function EditTaskModal({
     setLoading(false);
 
     if (!error) {
+      showToast('Tarefa atualizada com sucesso!', 'success');
       onTaskUpdated();
       onClose();
+    } else {
+      showToast('Erro ao atualizar tarefa.', 'error');
     }
   };
 

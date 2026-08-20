@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
+import { useToast } from '../context/ToastContext';
 
 interface EditProjectModalProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ export default function EditProjectModal({
   onClose,
   onProjectUpdated,
 }: EditProjectModalProps) {
+  const { showToast } = useToast();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [categorySelect, setCategorySelect] = useState('Geral');
@@ -67,8 +69,11 @@ export default function EditProjectModal({
     setLoading(false);
 
     if (!error) {
+      showToast('Projeto atualizado com sucesso!', 'success');
       onProjectUpdated();
       onClose();
+    } else {
+      showToast('Erro ao atualizar projeto.', 'error');
     }
   };
 

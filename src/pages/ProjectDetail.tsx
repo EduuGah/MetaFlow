@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
+import { useToast } from '../context/ToastContext';
 import ConfirmModal from '../components/ConfirmModal';
 import EditTaskModal from '../components/EditTaskModal';
 import EditProjectModal from '../components/EditProjectModal';
@@ -25,6 +26,7 @@ const PRIORITY_STYLES: Record<string, { label: string; style: string }> = {
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
+  const { showToast } = useToast();
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
@@ -135,10 +137,13 @@ export default function ProjectDetail() {
     });
 
     if (!error) {
+      showToast('Meta criada com sucesso!', 'success');
       setNewTaskTitle('');
       setNewTaskPriority('medium');
       setNewTaskRecurrence('none');
       fetchProjectData();
+    } else {
+      showToast('Erro ao criar meta.', 'error');
     }
   };
 
@@ -159,8 +164,11 @@ export default function ProjectDetail() {
     });
 
     if (!error) {
+      showToast('Subtarefa adicionada com sucesso!', 'success');
       setSubtaskTitleMap((prev) => ({ ...prev, [parentId]: '' }));
       fetchProjectData();
+    } else {
+      showToast('Erro ao adicionar subtarefa.', 'error');
     }
   };
 
@@ -183,7 +191,10 @@ export default function ProjectDetail() {
       })
       .eq('id', task.id);
 
-    if (error) {
+    if (!error) {
+      showToast('Status atualizado com sucesso!', 'success');
+    } else {
+      showToast('Erro ao atualizar status.', 'error');
       fetchProjectData();
     }
   };
@@ -210,7 +221,10 @@ export default function ProjectDetail() {
       })
       .eq('id', task.id);
 
-    if (error) {
+    if (!error) {
+      showToast('Status alterado com sucesso!', 'success');
+    } else {
+      showToast('Erro ao alterar status.', 'error');
       fetchProjectData();
     }
   };
@@ -223,7 +237,10 @@ export default function ProjectDetail() {
 
     const { error } = await supabase.from('tasks').delete().eq('id', targetId);
 
-    if (error) {
+    if (!error) {
+      showToast('Item excluído com sucesso!', 'success');
+    } else {
+      showToast('Erro ao excluir item.', 'error');
       fetchProjectData();
     }
     setTaskToDelete(null);

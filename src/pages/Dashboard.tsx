@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { User } from '@supabase/supabase-js';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
+import { useToast } from '../context/ToastContext';
 import CreateProjectModal from '../components/CreateProjectModal';
 import EditProjectModal from '../components/EditProjectModal';
 import ConfirmModal from '../components/ConfirmModal';
@@ -16,6 +17,7 @@ interface ProjectWithTasks extends Project {
 }
 
 export default function Dashboard() {
+  const { showToast } = useToast();
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<ProjectWithTasks[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,7 +61,10 @@ export default function Dashboard() {
 
     const { error } = await supabase.from('projects').delete().eq('id', targetId);
 
-    if (error) {
+    if (!error) {
+      showToast('Projeto excluído com sucesso!', 'success');
+    } else {
+      showToast('Erro ao excluir projeto.', 'error');
       fetchProjects();
     }
     setProjectToDelete(null);
