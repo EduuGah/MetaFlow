@@ -5,6 +5,7 @@ import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
 import CreateProjectModal from '../components/CreateProjectModal';
 import ConfirmModal from '../components/ConfirmModal';
+import { ProjectCardSkeleton } from '../components/Skeleton';
 
 interface ProjectWithTasks extends Project {
   tasks: Pick<Task, 'id' | 'is_completed'>[];
@@ -88,7 +89,11 @@ export default function Dashboard() {
         </div>
 
         {loading ? (
-          <div className="p-8 text-center text-xs text-slate-500">Carregando projetos...</div>
+          <div className="grid gap-3">
+            <ProjectCardSkeleton />
+            <ProjectCardSkeleton />
+            <ProjectCardSkeleton />
+          </div>
         ) : projects.length === 0 ? (
           <div className="p-8 text-center bg-white rounded-lg border border-slate-200 text-xs text-slate-500">
             Nenhum projeto encontrado. Clique em "+ Novo Projeto" para começar.

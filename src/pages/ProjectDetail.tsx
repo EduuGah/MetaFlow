@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
 import ConfirmModal from '../components/ConfirmModal';
+import { Skeleton, TaskSkeleton } from '../components/Skeleton';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -85,8 +86,25 @@ export default function ProjectDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 p-6 flex justify-center items-center text-xs text-slate-500">
-        Carregando detalhes do projeto...
+      <div className="min-h-screen bg-slate-50 p-6 text-slate-800">
+        <div className="max-w-3xl mx-auto space-y-6">
+          <Skeleton className="h-3 w-28" />
+
+          <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
+            <Skeleton className="h-7 w-1/2" />
+            <Skeleton className="h-4 w-3/4" />
+            <div className="mt-6 pt-4 border-t border-slate-100 space-y-2">
+              <Skeleton className="h-2 w-full rounded-full" />
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-3">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <TaskSkeleton />
+            <TaskSkeleton />
+            <TaskSkeleton />
+          </div>
+        </div>
       </div>
     );
   }
