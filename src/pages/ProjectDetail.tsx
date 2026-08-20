@@ -39,11 +39,10 @@ export default function ProjectDetail() {
     fetchProjectData();
   }, [fetchProjectData]);
 
-  // Criar Tarefa Principal
   const handleAddMainTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim()) {
-      setTaskError('Informe o título da tarefa principal.');
+      setTaskError('Informe o título da meta ou tarefa principal.');
       return;
     }
     if (!id) return;
@@ -62,7 +61,6 @@ export default function ProjectDetail() {
     }
   };
 
-  // Criar Subtarefa dentro de uma Tarefa Pai
   const handleAddSubtask = async (parentId: string, e: React.FormEvent) => {
     e.preventDefault();
     const title = subtaskTitleMap[parentId]?.trim();
@@ -82,7 +80,6 @@ export default function ProjectDetail() {
     }
   };
 
-  // Alternar status da tarefa ou subtarefa
   const handleToggleTask = async (task: Task) => {
     const nextStatus = !task.is_completed;
 
@@ -182,7 +179,7 @@ export default function ProjectDetail() {
             <form onSubmit={handleAddMainTask} className="flex gap-2">
               <input
                 type="text"
-                placeholder="Ex: Ir para a academia 4x na semana..."
+                placeholder="Adicionar nova meta (ex: Implementar módulo de relatórios)..."
                 value={newTaskTitle}
                 onChange={(e) => {
                   setNewTaskTitle(e.target.value);
@@ -213,7 +210,6 @@ export default function ProjectDetail() {
 
                 return (
                   <div key={mainTask.id} className="border border-slate-200 rounded-lg p-3.5 space-y-3 bg-white">
-                    {/* Linha da Tarefa Principal */}
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <input
@@ -232,7 +228,7 @@ export default function ProjectDetail() {
                           </span>
                           {subtasks.length > 0 && (
                             <span className="text-[11px] text-slate-500">
-                              Subtarefas: {subtasksCompleted}/{subtasks.length} concluídas
+                              Etapas: {subtasksCompleted}/{subtasks.length} concluídas
                             </span>
                           )}
                         </div>
@@ -262,7 +258,6 @@ export default function ProjectDetail() {
                       </div>
                     </div>
 
-                    {/* Campo de Entrada para Nova Subtarefa */}
                     {activeSubtaskInput === mainTask.id && (
                       <form
                         onSubmit={(e) => handleAddSubtask(mainTask.id, e)}
@@ -270,7 +265,7 @@ export default function ProjectDetail() {
                       >
                         <input
                           type="text"
-                          placeholder="Ex: Treino A (Peito e Tríceps)"
+                          placeholder="Adicionar subtarefa (ex: Criar rotas no backend)..."
                           value={subtaskTitleMap[mainTask.id] || ''}
                           onChange={(e) =>
                             setSubtaskTitleMap((prev) => ({ ...prev, [mainTask.id]: e.target.value }))
@@ -286,7 +281,6 @@ export default function ProjectDetail() {
                       </form>
                     )}
 
-                    {/* Lista de Subtarefas */}
                     {subtasks.length > 0 && (
                       <div className="pl-7 space-y-1.5 border-l-2 border-slate-100 ml-2 pt-1">
                         {subtasks.map((subtask) => (
