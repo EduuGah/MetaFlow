@@ -16,12 +16,14 @@ export default function EditTaskModal({
   onTaskUpdated,
 }: EditTaskModalProps) {
   const [title, setTitle] = useState('');
+  const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [recurrence, setRecurrence] = useState<string>('none');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (task) {
       setTitle(task.title);
+      setPriority(task.priority || 'medium');
       setRecurrence(task.recurrence || 'none');
     }
   }, [task]);
@@ -38,6 +40,7 @@ export default function EditTaskModal({
       .from('tasks')
       .update({
         title: title.trim(),
+        priority,
         recurrence: task.parent_id ? 'none' : recurrence,
       })
       .eq('id', task.id);
@@ -65,6 +68,19 @@ export default function EditTaskModal({
               onChange={(e) => setTitle(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:border-slate-800"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Prioridade</label>
+            <select
+              value={priority}
+              onChange={(e) => setPriority(e.target.value as 'low' | 'medium' | 'high')}
+              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
+            >
+              <option value="low">Baixa</option>
+              <option value="medium">Média</option>
+              <option value="high">Alta</option>
+            </select>
           </div>
 
           {!task.parent_id && (

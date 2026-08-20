@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
@@ -17,14 +17,29 @@ const RECURRENCE_LABELS: Record<string, string> = {
   weekly: 'Semanal',
 };
 
+const PRIORITY_STYLES: Record<string, { label: string; style: string }> = {
+  high: { label: 'Alta', style: 'bg-red-50 text-red-700 border-red-200' },
+  medium: { label: 'Média', style: 'bg-amber-50 text-amber-700 border-amber-200' },
+  low: { label: 'Baixa', style: 'bg-slate-100 text-slate-600 border-slate-200' },
+};
+
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  
+  // Estados do Formulário de Criação
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskPriority, setNewTaskPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [newTaskRecurrence, setNewTaskRecurrence] = useState<string>('none');
   const [subtaskTitleMap, setSubtaskTitleMap] = useState<Record<string, string>>({});
   const [activeSubtaskInput, setActiveSubtaskInput] = useState<string | null>(null);
+  
+  // Estados de Filtro e Pesquisa
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
+
   const [taskError, setTaskError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -112,11 +127,13 @@ export default function ProjectDetail() {
       title: newTaskTitle.trim(),
       is_completed: false,
       parent_id: null,
+      priority: newTaskPriority,
       recurrence: newTaskRecurrence,
     });
 
     if (!error) {
       setNewTaskTitle('');
+      setNewTaskPriority('medium');
       setNewTaskRecurrence('none');
       fetchProjectData();
     }
@@ -133,6 +150,7 @@ export default function ProjectDetail() {
       title,
       is_completed: false,
       parent_id: parentId,
+      priority: 'medium',
       recurrence: 'none',
     });
 
@@ -179,7 +197,30 @@ export default function ProjectDetail() {
     setTaskToDelete(null);
   };
 
-  const mainTasks = tasks.filter((t) => !t.parent_id);
+  // Filtragem e busca avançada
+  const filteredMainTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      if (task.parent_id) return false; // Apenas tarefas principais
+
+      // Busca por título (inclui busca no título das subtarefas)
+      const subtasks = tasks.filter((s) => s.parent_id === task.id);
+      const matchesSearch =
+        task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        subtasks.some((s) => s.title.toLowerCase().includes(searchTerm.toLowerCase()));
+
+      if (!matchesSearch) return false;
+
+      // Filtro por Status
+      if (statusFilter === 'pending' && task.is_completed) return false;
+      if (statusFilter === 'completed' && !task.is_completed) return false;
+
+      // Filtro por Prioridade
+      if (priorityFilter !== 'all' && (task.priority || 'medium') !== priorityFilter) return false;
+
+      return true;
+    });
+  }, [tasks, searchTerm, statusFilter, priorityFilter]);
+
   const completedCount = tasks.filter((t) => t.is_completed).length;
   const progressPercentage = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
@@ -267,6 +308,17 @@ export default function ProjectDetail() {
                   taskError ? 'border-red-400 focus:border-red-600' : 'border-slate-300 focus:border-slate-800'
                 }`}
               />
+
+              <select
+                value={newTaskPriority}
+                onChange={(e) => setNewTaskPriority(e.target.value as 'low' | 'medium' | 'high')}
+                className="px-3 py-2.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
+              >
+                <option value="low">Baixa Pri.</option>
+                <option value="medium">Média Pri.</option>
+                <option value="high">Alta Pri.</option>
+              </select>
+
               <select
                 value={newTaskRecurrence}
                 onChange={(e) => setNewTaskRecurrence(e.target.value)}
@@ -292,14 +344,53 @@ export default function ProjectDetail() {
             {taskError && <p className="text-[11px] text-red-600 mt-1.5 font-medium">{taskError}</p>}
           </div>
 
+          {/* Barra de Filtros e Busca */}
+          <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row gap-2 justify-between items-stretch sm:items-center">
+            <input
+              type="text"
+              placeholder="Buscar meta ou etapa..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:border-slate-800"
+            />
+
+            <div className="flex gap-2">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'pending' | 'completed')}
+                className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-700 focus:outline-none focus:border-slate-800"
+              >
+                <option value="all">Status: Todos</option>
+                <option value="pending">Pendentes</option>
+                <option value="completed">Concluídas</option>
+              </select>
+
+              <select
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value as 'all' | 'high' | 'medium' | 'low')}
+                className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-700 focus:outline-none focus:border-slate-800"
+              >
+                <option value="all">Prioridade: Todas</option>
+                <option value="high">Alta</option>
+                <option value="medium">Média</option>
+                <option value="low">Baixa</option>
+              </select>
+            </div>
+          </div>
+
           {/* Lista de Metas */}
-          <div className="space-y-3 pt-2">
-            {mainTasks.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-6">Nenhuma meta cadastrada ainda.</p>
+          <div className="space-y-3 pt-1">
+            {filteredMainTasks.length === 0 ? (
+              <p className="text-xs text-slate-400 text-center py-6">
+                {searchTerm || statusFilter !== 'all' || priorityFilter !== 'all'
+                  ? 'Nenhum resultado encontrado para os filtros selecionados.'
+                  : 'Nenhuma meta cadastrada ainda.'}
+              </p>
             ) : (
-              mainTasks.map((mainTask) => {
+              filteredMainTasks.map((mainTask) => {
                 const subtasks = tasks.filter((t) => t.parent_id === mainTask.id);
                 const subtasksCompleted = subtasks.filter((s) => s.is_completed).length;
+                const priorityInfo = PRIORITY_STYLES[mainTask.priority || 'medium'];
 
                 return (
                   <div key={mainTask.id} className="border border-slate-200 rounded-lg p-3.5 space-y-3 bg-white">
@@ -312,22 +403,30 @@ export default function ProjectDetail() {
                           className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer shrink-0"
                         />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <span
-                              className={`text-sm font-semibold truncate block ${
+                              className={`text-sm font-semibold truncate ${
                                 mainTask.is_completed ? 'line-through text-slate-400' : 'text-slate-800'
                               }`}
                             >
                               {mainTask.title}
                             </span>
+
+                            {/* Badge de Prioridade */}
+                            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${priorityInfo.style} whitespace-nowrap`}>
+                              {priorityInfo.label}
+                            </span>
+
+                            {/* Badge de Recorrência */}
                             {mainTask.recurrence && mainTask.recurrence !== 'none' && (
                               <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 whitespace-nowrap">
                                 {RECURRENCE_LABELS[mainTask.recurrence] || mainTask.recurrence}
                               </span>
                             )}
                           </div>
+
                           {subtasks.length > 0 && (
-                            <span className="text-[11px] text-slate-500">
+                            <span className="text-[11px] text-slate-500 block mt-0.5">
                               Etapas: {subtasksCompleted}/{subtasks.length} concluídas
                             </span>
                           )}

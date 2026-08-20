@@ -13,7 +13,8 @@ export interface Task {
   parent_id: string | null;
   title: string;
   is_completed: boolean;
-  recurrence?: string | null; // 'none' | '15m' | '30m' | '1h' | '6h' | '12h' | 'daily' | 'weekly'
+  priority?: 'low' | 'medium' | 'high';
+  recurrence?: string | null;
   last_completed_at?: string | null;
   created_at: string;
 }
