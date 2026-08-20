@@ -13,6 +13,7 @@ export interface Task {
   parent_id: string | null;
   title: string;
   is_completed: boolean;
+  status?: 'todo' | 'in_progress' | 'done';
   priority?: 'low' | 'medium' | 'high';
   recurrence?: string | null;
   last_completed_at?: string | null;

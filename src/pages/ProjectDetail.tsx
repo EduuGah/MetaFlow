@@ -6,11 +6,6 @@ import ConfirmModal from '../components/ConfirmModal';
 import EditTaskModal from '../components/EditTaskModal';
 import EditProjectModal from '../components/EditProjectModal';
 import { Skeleton, TaskSkeleton } from '../components/Skeleton';
-import {
-  requestNotificationPermission,
-  getNotificationPermissionState,
-  sendNotification,
-} from '../utils/notifications';
 
 const RECURRENCE_LABELS: Record<string, string> = {
   '15m': 'A cada 15 min',
@@ -32,9 +27,7 @@ export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  
-  // Notificações
-  const [notificationState, setNotificationState] = useState<string>(getNotificationPermissionState());
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
 
   // Form de Criação
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -42,7 +35,8 @@ export default function ProjectDetail() {
   const [newTaskRecurrence, setNewTaskRecurrence] = useState<string>('none');
   const [subtaskTitleMap, setSubtaskTitleMap] = useState<Record<string, string>>({});
   const [activeSubtaskInput, setActiveSubtaskInput] = useState<string | null>(null);
-  
+  const [expandedKanbanTasks, setExpandedKanbanTasks] = useState<Record<string, boolean>>({});
+
   // Filtros
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
@@ -55,19 +49,9 @@ export default function ProjectDetail() {
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
 
-  const handleEnableNotifications = async () => {
-    const granted = await requestNotificationPermission();
-    setNotificationState(granted ? 'granted' : 'denied');
-    if (granted) {
-      sendNotification('MetaFlow Notificações Ativadas', {
-        body: 'Você receberá avisos quando suas metas serem resetadas ou precisarem de atenção.',
-      });
-    }
-  };
-
   const checkAndResetRecurrentTasks = useCallback(async (fetchedTasks: Task[]) => {
     const now = new Date();
-    const tasksToReset: Task[] = [];
+    const tasksToResetIds: string[] = [];
 
     fetchedTasks.forEach((task) => {
       if (!task.is_completed || !task.last_completed_at || !task.recurrence || task.recurrence === 'none') {
@@ -89,27 +73,17 @@ export default function ProjectDetail() {
         case 'weekly': shouldReset = diffMinutes >= 10080; break;
       }
 
-      if (shouldReset) tasksToReset.push(task);
+      if (shouldReset) tasksToResetIds.push(task.id);
     });
 
-    if (tasksToReset.length > 0) {
-      const resetIds = tasksToReset.map((t) => t.id);
-
+    if (tasksToResetIds.length > 0) {
       await supabase
         .from('tasks')
-        .update({ is_completed: false })
-        .in('id', resetIds);
-
-      // Disparar notificação nativa para cada tarefa zerada
-      tasksToReset.forEach((t) => {
-        sendNotification(`Meta Pronta: ${t.title}`, {
-          body: `O ciclo desta tarefa foi renovado e ela está pronta para ser realizada novamente.`,
-          tag: `reset-${t.id}`,
-        });
-      });
+        .update({ is_completed: false, status: 'todo' })
+        .in('id', tasksToResetIds);
 
       return fetchedTasks.map((t) =>
-        resetIds.includes(t.id) ? { ...t, is_completed: false } : t
+        tasksToResetIds.includes(t.id) ? { ...t, is_completed: false, status: 'todo' as const } : t
       );
     }
 
@@ -154,6 +128,7 @@ export default function ProjectDetail() {
       project_id: id,
       title: newTaskTitle.trim(),
       is_completed: false,
+      status: 'todo',
       parent_id: null,
       priority: newTaskPriority,
       recurrence: newTaskRecurrence,
@@ -177,6 +152,7 @@ export default function ProjectDetail() {
       project_id: id,
       title,
       is_completed: false,
+      status: 'todo',
       parent_id: parentId,
       priority: 'medium',
       recurrence: 'none',
@@ -188,13 +164,40 @@ export default function ProjectDetail() {
     }
   };
 
+  const handleStatusChange = async (task: Task, newStatus: 'todo' | 'in_progress' | 'done') => {
+    const isDone = newStatus === 'done';
+    const nowIso = isDone ? new Date().toISOString() : null;
+
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === task.id ? { ...t, status: newStatus, is_completed: isDone, last_completed_at: nowIso } : t
+      )
+    );
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({
+        status: newStatus,
+        is_completed: isDone,
+        last_completed_at: nowIso,
+      })
+      .eq('id', task.id);
+
+    if (error) {
+      fetchProjectData();
+    }
+  };
+
   const handleToggleTask = async (task: Task) => {
     const nextStatus = !task.is_completed;
+    const newKanbanStatus = nextStatus ? 'done' : 'todo';
     const nowIso = nextStatus ? new Date().toISOString() : null;
 
     setTasks((prev) =>
       prev.map((t) =>
-        t.id === task.id ? { ...t, is_completed: nextStatus, last_completed_at: nowIso } : t
+        t.id === task.id
+          ? { ...t, is_completed: nextStatus, status: newKanbanStatus, last_completed_at: nowIso }
+          : t
       )
     );
 
@@ -202,6 +205,7 @@ export default function ProjectDetail() {
       .from('tasks')
       .update({
         is_completed: nextStatus,
+        status: newKanbanStatus,
         last_completed_at: nowIso,
       })
       .eq('id', task.id);
@@ -223,6 +227,10 @@ export default function ProjectDetail() {
       fetchProjectData();
     }
     setTaskToDelete(null);
+  };
+
+  const toggleKanbanSubtaskExpand = (taskId: string) => {
+    setExpandedKanbanTasks((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
   };
 
   const filteredMainTasks = useMemo(() => {
@@ -278,26 +286,10 @@ export default function ProjectDetail() {
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
-      <div className="max-w-3xl mx-auto space-y-5">
+      <div className="max-w-4xl mx-auto space-y-5">
         <Link to="/dashboard" className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors inline-block py-1">
           ← Voltar ao Dashboard
         </Link>
-
-        {/* Banner de Solicitação de Notificações */}
-        {notificationState === 'default' && (
-          <div className="bg-slate-900 text-white p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-            <div className="text-xs space-y-0.5">
-              <p className="font-semibold">Ativar Notificações do MetaFlow</p>
-              <p className="text-slate-300">Receba avisos nativos no celular ou PC quando suas tarefas forem zeradas.</p>
-            </div>
-            <button
-              onClick={handleEnableNotifications}
-              className="px-3 py-1.5 text-xs font-medium bg-white text-slate-900 rounded-md hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
-            >
-              Ativar
-            </button>
-          </div>
-        )}
 
         {/* Card do Projeto */}
         <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs">
@@ -330,10 +322,37 @@ export default function ProjectDetail() {
           </div>
         </div>
 
-        {/* Form de Nova Meta */}
+        {/* Seção Principal */}
         <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
-          <h2 className="text-sm font-semibold text-slate-800">Tarefas & Metas</h2>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <h2 className="text-sm font-semibold text-slate-800">Tarefas & Metas</h2>
 
+            {/* Alternador de Modo de Visualização */}
+            <div className="flex bg-slate-100 p-0.5 rounded-md border border-slate-200 self-stretch sm:self-auto">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`flex-1 sm:flex-none px-3 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer ${
+                  viewMode === 'list'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Lista
+              </button>
+              <button
+                onClick={() => setViewMode('kanban')}
+                className={`flex-1 sm:flex-none px-3 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer ${
+                  viewMode === 'kanban'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Quadro Kanban
+              </button>
+            </div>
+          </div>
+
+          {/* Form de Criação */}
           <div>
             <form onSubmit={handleAddMainTask} className="flex flex-col sm:flex-row gap-2">
               <input
@@ -418,171 +437,326 @@ export default function ProjectDetail() {
             </div>
           </div>
 
-          {/* Lista de Metas */}
-          <div className="space-y-3 pt-1">
-            {filteredMainTasks.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-6">
-                {searchTerm || statusFilter !== 'all' || priorityFilter !== 'all'
-                  ? 'Nenhum resultado encontrado para os filtros selecionados.'
-                  : 'Nenhuma meta cadastrada ainda.'}
-              </p>
-            ) : (
-              filteredMainTasks.map((mainTask) => {
-                const subtasks = tasks.filter((t) => t.parent_id === mainTask.id);
-                const subtasksCompleted = subtasks.filter((s) => s.is_completed).length;
-                const priorityInfo = PRIORITY_STYLES[mainTask.priority || 'medium'];
+          {/* MODO LISTA */}
+          {viewMode === 'list' ? (
+            <div className="space-y-3 pt-1">
+              {filteredMainTasks.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-6">
+                  Nenhum resultado encontrado para os filtros selecionados.
+                </p>
+              ) : (
+                filteredMainTasks.map((mainTask) => {
+                  const subtasks = tasks.filter((t) => t.parent_id === mainTask.id);
+                  const subtasksCompleted = subtasks.filter((s) => s.is_completed).length;
+                  const priorityInfo = PRIORITY_STYLES[mainTask.priority || 'medium'] || PRIORITY_STYLES.medium;
 
-                return (
-                  <div key={mainTask.id} className="border border-slate-200 rounded-lg p-3.5 space-y-3 bg-white">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={mainTask.is_completed}
-                          onChange={() => handleToggleTask(mainTask)}
-                          className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer shrink-0"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span
-                              className={`text-sm font-semibold truncate ${
-                                mainTask.is_completed ? 'line-through text-slate-400' : 'text-slate-800'
-                              }`}
-                            >
-                              {mainTask.title}
-                            </span>
+                  return (
+                    <div key={mainTask.id} className="border border-slate-200 rounded-lg p-3.5 space-y-3 bg-white">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={mainTask.is_completed}
+                            onChange={() => handleToggleTask(mainTask)}
+                            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`text-sm font-semibold truncate ${
+                                  mainTask.is_completed ? 'line-through text-slate-400' : 'text-slate-800'
+                                }`}
+                              >
+                                {mainTask.title}
+                              </span>
 
-                            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${priorityInfo.style} whitespace-nowrap`}>
-                              {priorityInfo.label}
-                            </span>
+                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${priorityInfo.style} whitespace-nowrap`}>
+                                {priorityInfo.label}
+                              </span>
 
-                            {mainTask.recurrence && mainTask.recurrence !== 'none' && (
-                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 whitespace-nowrap">
-                                {RECURRENCE_LABELS[mainTask.recurrence] || mainTask.recurrence}
+                              {mainTask.recurrence && mainTask.recurrence !== 'none' && (
+                                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 whitespace-nowrap">
+                                  {RECURRENCE_LABELS[mainTask.recurrence] || mainTask.recurrence}
+                                </span>
+                              )}
+                            </div>
+
+                            {subtasks.length > 0 && (
+                              <span className="text-[11px] text-slate-500 block mt-0.5">
+                                Etapas: {subtasksCompleted}/{subtasks.length} concluídas
                               </span>
                             )}
                           </div>
+                        </div>
 
-                          {subtasks.length > 0 && (
-                            <span className="text-[11px] text-slate-500 block mt-0.5">
-                              Etapas: {subtasksCompleted}/{subtasks.length} concluídas
-                            </span>
-                          )}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setActiveSubtaskInput(activeSubtaskInput === mainTask.id ? null : mainTask.id)
+                            }
+                            className="text-[11px] font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+                          >
+                            + Subtarefa
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setTaskToEdit(mainTask)}
+                            className="text-slate-400 hover:text-slate-800 p-1 cursor-pointer shrink-0"
+                            title="Editar meta"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setTaskToDelete({ id: mainTask.id, title: mainTask.title })}
+                            className="text-slate-400 hover:text-red-600 p-1 cursor-pointer shrink-0"
+                            title="Excluir meta"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setActiveSubtaskInput(activeSubtaskInput === mainTask.id ? null : mainTask.id)
-                          }
-                          className="text-[11px] font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
-                        >
-                          + Subtarefa
-                        </button>
+                      {activeSubtaskInput === mainTask.id && (
+                        <form onSubmit={(e) => handleAddSubtask(mainTask.id, e)} className="flex gap-2 pl-7 pt-1">
+                          <input
+                            type="text"
+                            placeholder="Adicionar subtarefa..."
+                            value={subtaskTitleMap[mainTask.id] || ''}
+                            onChange={(e) =>
+                              setSubtaskTitleMap((prev) => ({ ...prev, [mainTask.id]: e.target.value }))
+                            }
+                            className="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800"
+                          />
+                          <button
+                            type="submit"
+                            className="px-3 py-1.5 text-xs font-medium bg-slate-800 text-white rounded-md hover:bg-slate-700 cursor-pointer"
+                          >
+                            Salvar
+                          </button>
+                        </form>
+                      )}
 
-                        <button
-                          type="button"
-                          onClick={() => setTaskToEdit(mainTask)}
-                          className="text-slate-400 hover:text-slate-800 p-1 cursor-pointer shrink-0"
-                          title="Editar meta"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
+                      {subtasks.length > 0 && (
+                        <div className="pl-7 space-y-1.5 border-l-2 border-slate-100 ml-2 pt-1">
+                          {subtasks.map((subtask) => (
+                            <div
+                              key={subtask.id}
+                              className="flex items-center justify-between p-2 rounded-md hover:bg-slate-50 transition-colors"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={subtask.is_completed}
+                                  onChange={() => handleToggleTask(subtask)}
+                                  className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer"
+                                />
+                                <span className={`text-xs ${subtask.is_completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                                  {subtask.title}
+                                </span>
+                              </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setTaskToDelete({ id: mainTask.id, title: mainTask.title })}
-                          className="text-slate-400 hover:text-red-600 p-1 cursor-pointer shrink-0"
-                          title="Excluir meta"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
-                      </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setTaskToEdit(subtask)}
+                                  className="text-slate-300 hover:text-slate-700 p-1 cursor-pointer"
+                                  title="Editar subtarefa"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setTaskToDelete({ id: subtask.id, title: subtask.title })}
+                                  className="text-slate-300 hover:text-red-600 p-1 cursor-pointer"
+                                  title="Excluir subtarefa"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            /* MODO QUADRO KANBAN */
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 overflow-x-auto">
+              {[
+                { id: 'todo', label: 'A Fazer', color: 'bg-slate-100 text-slate-700' },
+                { id: 'in_progress', label: 'Em Andamento', color: 'bg-amber-100 text-amber-800' },
+                { id: 'done', label: 'Concluído', color: 'bg-emerald-100 text-emerald-800' },
+              ].map((column) => {
+                const columnTasks = filteredMainTasks.filter((t) => (t.status || (t.is_completed ? 'done' : 'todo')) === column.id);
+
+                return (
+                  <div key={column.id} className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-3 min-w-[250px]">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${column.color}`}>
+                        {column.label}
+                      </span>
+                      <span className="text-xs font-medium text-slate-500">{columnTasks.length}</span>
                     </div>
 
-                    {activeSubtaskInput === mainTask.id && (
-                      <form
-                        onSubmit={(e) => handleAddSubtask(mainTask.id, e)}
-                        className="flex gap-2 pl-7 pt-1"
-                      >
-                        <input
-                          type="text"
-                          placeholder="Adicionar subtarefa..."
-                          value={subtaskTitleMap[mainTask.id] || ''}
-                          onChange={(e) =>
-                            setSubtaskTitleMap((prev) => ({ ...prev, [mainTask.id]: e.target.value }))
-                          }
-                          className="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800"
-                        />
-                        <button
-                          type="submit"
-                          className="px-3 py-1.5 text-xs font-medium bg-slate-800 text-white rounded-md hover:bg-slate-700 cursor-pointer"
-                        >
-                          Salvar
-                        </button>
-                      </form>
-                    )}
+                    <div className="space-y-2.5">
+                      {columnTasks.length === 0 ? (
+                        <p className="text-[11px] text-slate-400 text-center py-4">Nenhuma meta nesta coluna.</p>
+                      ) : (
+                        columnTasks.map((task) => {
+                          const subtasks = tasks.filter((s) => s.parent_id === task.id);
+                          const subtasksCompleted = subtasks.filter((s) => s.is_completed).length;
+                          const priorityInfo = PRIORITY_STYLES[task.priority || 'medium'] || PRIORITY_STYLES.medium;
+                          const isExpanded = !!expandedKanbanTasks[task.id];
 
-                    {subtasks.length > 0 && (
-                      <div className="pl-7 space-y-1.5 border-l-2 border-slate-100 ml-2 pt-1">
-                        {subtasks.map((subtask) => (
-                          <div
-                            key={subtask.id}
-                            className="flex items-center justify-between p-2 rounded-md hover:bg-slate-50 transition-colors"
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <input
-                                type="checkbox"
-                                checked={subtask.is_completed}
-                                onChange={() => handleToggleTask(subtask)}
-                                className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer"
-                              />
-                              <span
-                                className={`text-xs ${
-                                  subtask.is_completed ? 'line-through text-slate-400' : 'text-slate-700'
-                                }`}
-                              >
-                                {subtask.title}
-                              </span>
-                            </div>
+                          return (
+                            <div key={task.id} className="bg-white p-3.5 rounded-md border border-slate-200 shadow-xs space-y-2.5">
+                              <div className="flex justify-between items-start gap-2">
+                                <span className={`text-xs font-semibold leading-snug ${task.is_completed ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+                                  {task.title}
+                                </span>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => setTaskToEdit(task)}
+                                    className="text-slate-300 hover:text-slate-700 p-0.5 cursor-pointer"
+                                    title="Editar"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTaskToDelete({ id: task.id, title: task.title })}
+                                    className="text-slate-300 hover:text-red-600 p-0.5 cursor-pointer"
+                                    title="Excluir"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
 
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setTaskToEdit(subtask)}
-                                className="text-slate-300 hover:text-slate-700 p-1 cursor-pointer"
-                                title="Editar subtarefa"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setTaskToDelete({ id: subtask.id, title: subtask.title })}
-                                className="text-slate-300 hover:text-red-600 p-1 cursor-pointer"
-                                title="Excluir subtarefa"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              </button>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${priorityInfo.style}`}>
+                                  {priorityInfo.label}
+                                </span>
+                                {task.recurrence && task.recurrence !== 'none' && (
+                                  <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                                    {RECURRENCE_LABELS[task.recurrence] || task.recurrence}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Barra e Controle de Subtarefas no Kanban */}
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <div className="flex justify-between items-center text-[11px] text-slate-500 mb-1">
+                                  <span className="font-medium">
+                                    Subtarefas: {subtasksCompleted}/{subtasks.length}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleKanbanSubtaskExpand(task.id)}
+                                    className="text-[10px] text-slate-700 hover:underline cursor-pointer"
+                                  >
+                                    {isExpanded ? 'Ocultar ▲' : 'Ver etapas ▼'}
+                                  </button>
+                                </div>
+
+                                {subtasks.length > 0 && (
+                                  <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden mb-2">
+                                    <div
+                                      className="bg-slate-800 h-full transition-all duration-300"
+                                      style={{ width: `${Math.round((subtasksCompleted / subtasks.length) * 100)}%` }}
+                                    />
+                                  </div>
+                                )}
+
+                                {isExpanded && (
+                                  <div className="mt-2 space-y-1.5 bg-slate-50 p-2 rounded-md border border-slate-100">
+                                    {subtasks.length === 0 ? (
+                                      <p className="text-[10px] text-slate-400">Nenhuma subtarefa.</p>
+                                    ) : (
+                                      subtasks.map((sub) => (
+                                        <div key={sub.id} className="flex items-center justify-between gap-1.5">
+                                          <div className="flex items-center gap-1.5 min-w-0">
+                                            <input
+                                              type="checkbox"
+                                              checked={sub.is_completed}
+                                              onChange={() => handleToggleTask(sub)}
+                                              className="h-3 w-3 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer"
+                                            />
+                                            <span className={`text-[11px] truncate ${sub.is_completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                                              {sub.title}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))
+                                    )}
+
+                                    <form
+                                      onSubmit={(e) => handleAddSubtask(task.id, e)}
+                                      className="flex gap-1 pt-1 mt-1 border-t border-slate-200/60"
+                                    >
+                                      <input
+                                        type="text"
+                                        placeholder="+ Etapa"
+                                        value={subtaskTitleMap[task.id] || ''}
+                                        onChange={(e) =>
+                                          setSubtaskTitleMap((prev) => ({ ...prev, [task.id]: e.target.value }))
+                                        }
+                                        className="flex-1 px-2 py-1 text-[10px] border border-slate-200 rounded bg-white focus:outline-none focus:border-slate-800"
+                                      />
+                                      <button
+                                        type="submit"
+                                        className="px-2 py-1 text-[10px] font-medium bg-slate-800 text-white rounded hover:bg-slate-700 cursor-pointer"
+                                      >
+                                        Add
+                                      </button>
+                                    </form>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Mover Card de Coluna */}
+                              <div className="pt-2 border-t border-slate-100 flex justify-between items-center">
+                                <span className="text-[10px] text-slate-400 font-medium">Coluna:</span>
+                                <select
+                                  value={task.status || (task.is_completed ? 'done' : 'todo')}
+                                  onChange={(e) => handleStatusChange(task, e.target.value as 'todo' | 'in_progress' | 'done')}
+                                  className="text-[10px] border border-slate-200 rounded px-1.5 py-0.5 bg-white text-slate-700 focus:outline-none"
+                                >
+                                  <option value="todo">A Fazer</option>
+                                  <option value="in_progress">Em Andamento</option>
+                                  <option value="done">Concluído</option>
+                                </select>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
                 );
-              })
-            )}
-          </div>
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -593,12 +767,14 @@ export default function ProjectDetail() {
         onProjectUpdated={fetchProjectData}
       />
 
-      <EditTaskModal
-        isOpen={!!taskToEdit}
-        task={taskToEdit}
-        onClose={() => setTaskToEdit(null)}
-        onTaskUpdated={fetchProjectData}
-      />
+      {taskToEdit && (
+        <EditTaskModal
+          isOpen={!!taskToEdit}
+          task={taskToEdit}
+          onClose={() => setTaskToEdit(null)}
+          onTaskUpdated={fetchProjectData}
+        />
+      )}
 
       <ConfirmModal
         isOpen={!!taskToDelete}
