@@ -6,6 +6,11 @@ import ConfirmModal from '../components/ConfirmModal';
 import EditTaskModal from '../components/EditTaskModal';
 import EditProjectModal from '../components/EditProjectModal';
 import { Skeleton, TaskSkeleton } from '../components/Skeleton';
+import {
+  requestNotificationPermission,
+  getNotificationPermissionState,
+  sendNotification,
+} from '../utils/notifications';
 
 const RECURRENCE_LABELS: Record<string, string> = {
   '15m': 'A cada 15 min',
@@ -28,14 +33,17 @@ export default function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   
-  // Estados do Formulário de Criação
+  // Notificações
+  const [notificationState, setNotificationState] = useState<string>(getNotificationPermissionState());
+
+  // Form de Criação
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskPriority, setNewTaskPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [newTaskRecurrence, setNewTaskRecurrence] = useState<string>('none');
   const [subtaskTitleMap, setSubtaskTitleMap] = useState<Record<string, string>>({});
   const [activeSubtaskInput, setActiveSubtaskInput] = useState<string | null>(null);
   
-  // Estados de Filtro e Pesquisa
+  // Filtros
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
@@ -47,9 +55,19 @@ export default function ProjectDetail() {
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
 
+  const handleEnableNotifications = async () => {
+    const granted = await requestNotificationPermission();
+    setNotificationState(granted ? 'granted' : 'denied');
+    if (granted) {
+      sendNotification('MetaFlow Notificações Ativadas', {
+        body: 'Você receberá avisos quando suas metas serem resetadas ou precisarem de atenção.',
+      });
+    }
+  };
+
   const checkAndResetRecurrentTasks = useCallback(async (fetchedTasks: Task[]) => {
     const now = new Date();
-    const tasksToResetIds: string[] = [];
+    const tasksToReset: Task[] = [];
 
     fetchedTasks.forEach((task) => {
       if (!task.is_completed || !task.last_completed_at || !task.recurrence || task.recurrence === 'none') {
@@ -71,17 +89,27 @@ export default function ProjectDetail() {
         case 'weekly': shouldReset = diffMinutes >= 10080; break;
       }
 
-      if (shouldReset) tasksToResetIds.push(task.id);
+      if (shouldReset) tasksToReset.push(task);
     });
 
-    if (tasksToResetIds.length > 0) {
+    if (tasksToReset.length > 0) {
+      const resetIds = tasksToReset.map((t) => t.id);
+
       await supabase
         .from('tasks')
         .update({ is_completed: false })
-        .in('id', tasksToResetIds);
+        .in('id', resetIds);
+
+      // Disparar notificação nativa para cada tarefa zerada
+      tasksToReset.forEach((t) => {
+        sendNotification(`Meta Pronta: ${t.title}`, {
+          body: `O ciclo desta tarefa foi renovado e ela está pronta para ser realizada novamente.`,
+          tag: `reset-${t.id}`,
+        });
+      });
 
       return fetchedTasks.map((t) =>
-        tasksToResetIds.includes(t.id) ? { ...t, is_completed: false } : t
+        resetIds.includes(t.id) ? { ...t, is_completed: false } : t
       );
     }
 
@@ -197,12 +225,10 @@ export default function ProjectDetail() {
     setTaskToDelete(null);
   };
 
-  // Filtragem e busca avançada
   const filteredMainTasks = useMemo(() => {
     return tasks.filter((task) => {
-      if (task.parent_id) return false; // Apenas tarefas principais
+      if (task.parent_id) return false;
 
-      // Busca por título (inclui busca no título das subtarefas)
       const subtasks = tasks.filter((s) => s.parent_id === task.id);
       const matchesSearch =
         task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -210,11 +236,9 @@ export default function ProjectDetail() {
 
       if (!matchesSearch) return false;
 
-      // Filtro por Status
       if (statusFilter === 'pending' && task.is_completed) return false;
       if (statusFilter === 'completed' && !task.is_completed) return false;
 
-      // Filtro por Prioridade
       if (priorityFilter !== 'all' && (task.priority || 'medium') !== priorityFilter) return false;
 
       return true;
@@ -258,6 +282,22 @@ export default function ProjectDetail() {
         <Link to="/dashboard" className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors inline-block py-1">
           ← Voltar ao Dashboard
         </Link>
+
+        {/* Banner de Solicitação de Notificações */}
+        {notificationState === 'default' && (
+          <div className="bg-slate-900 text-white p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="text-xs space-y-0.5">
+              <p className="font-semibold">Ativar Notificações do MetaFlow</p>
+              <p className="text-slate-300">Receba avisos nativos no celular ou PC quando suas tarefas forem zeradas.</p>
+            </div>
+            <button
+              onClick={handleEnableNotifications}
+              className="px-3 py-1.5 text-xs font-medium bg-white text-slate-900 rounded-md hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+            >
+              Ativar
+            </button>
+          </div>
+        )}
 
         {/* Card do Projeto */}
         <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs">
@@ -412,12 +452,10 @@ export default function ProjectDetail() {
                               {mainTask.title}
                             </span>
 
-                            {/* Badge de Prioridade */}
                             <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${priorityInfo.style} whitespace-nowrap`}>
                               {priorityInfo.label}
                             </span>
 
-                            {/* Badge de Recorrência */}
                             {mainTask.recurrence && mainTask.recurrence !== 'none' && (
                               <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 whitespace-nowrap">
                                 {RECURRENCE_LABELS[mainTask.recurrence] || mainTask.recurrence}
