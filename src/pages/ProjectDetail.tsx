@@ -41,12 +41,11 @@ export default function ProjectDetail() {
     e.preventDefault();
     
     if (!newTaskTitle.trim()) {
-      setTaskError('Informe uma descrição para a tarefa antes de adicionar.');
+      setTaskError('Informe uma descrição para a tarefa.');
       return;
     }
 
     if (!id) return;
-
     setTaskError(null);
 
     const { error } = await supabase.from('tasks').insert({
@@ -95,21 +94,18 @@ export default function ProjectDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 p-6 text-slate-800">
+      <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
         <div className="max-w-3xl mx-auto space-y-6">
-          <Skeleton className="h-3 w-28" />
-
-          <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
+          <Skeleton className="h-4 w-28" />
+          <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
             <Skeleton className="h-7 w-1/2" />
             <Skeleton className="h-4 w-3/4" />
-            <div className="mt-6 pt-4 border-t border-slate-100 space-y-2">
+            <div className="mt-6 pt-4 border-t border-slate-100">
               <Skeleton className="h-2 w-full rounded-full" />
             </div>
           </div>
-
-          <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-3">
+          <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs space-y-3">
             <Skeleton className="h-4 w-32 mb-4" />
-            <TaskSkeleton />
             <TaskSkeleton />
             <TaskSkeleton />
           </div>
@@ -130,19 +126,20 @@ export default function ProjectDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 text-slate-800">
-      <div className="max-w-3xl mx-auto space-y-6">
-        <Link to="/dashboard" className="text-xs text-slate-500 hover:text-slate-800 transition-colors inline-block">
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
+      <div className="max-w-3xl mx-auto space-y-5">
+        <Link to="/dashboard" className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors inline-block py-1">
           ← Voltar ao Dashboard
         </Link>
 
-        <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs">
-          <h1 className="text-2xl font-bold text-slate-900">{project.title}</h1>
+        {/* Card do Projeto */}
+        <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs">
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{project.title}</h1>
           {project.description && (
-            <p className="text-sm text-slate-600 mt-2">{project.description}</p>
+            <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">{project.description}</p>
           )}
 
-          <div className="mt-6 pt-4 border-t border-slate-100">
+          <div className="mt-5 pt-4 border-t border-slate-100">
             <div className="flex justify-between text-xs text-slate-600 mb-1.5 font-medium">
               <span>Progresso Geral</span>
               <span>{progressPercentage}%</span>
@@ -156,11 +153,12 @@ export default function ProjectDetail() {
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
+        {/* Checklist de Tarefas */}
+        <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
           <h2 className="text-sm font-semibold text-slate-800">Tarefas & Checklist</h2>
 
           <div>
-            <form onSubmit={handleAddTask} className="flex gap-2">
+            <form onSubmit={handleAddTask} className="flex flex-col sm:flex-row gap-2">
               <input
                 type="text"
                 placeholder="Adicionar nova etapa..."
@@ -169,7 +167,7 @@ export default function ProjectDetail() {
                   setNewTaskTitle(e.target.value);
                   if (taskError) setTaskError(null);
                 }}
-                className={`flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none transition-colors ${
+                className={`flex-1 px-3.5 py-2.5 text-sm border rounded-md focus:outline-none transition-colors ${
                   taskError 
                     ? 'border-red-400 focus:border-red-600' 
                     : 'border-slate-300 focus:border-slate-800'
@@ -177,7 +175,7 @@ export default function ProjectDetail() {
               />
               <button
                 type="submit"
-                className="px-4 py-2 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
+                className="px-4 py-2.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer active:scale-98"
               >
                 Adicionar
               </button>
@@ -187,40 +185,45 @@ export default function ProjectDetail() {
             )}
           </div>
 
-          <div className="space-y-2 pt-2">
+          <div className="space-y-1.5 pt-1">
             {tasks.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-4">Nenhuma tarefa criada ainda.</p>
+              <p className="text-xs text-slate-400 text-center py-6">Nenhuma tarefa criada ainda.</p>
             ) : (
               tasks.map((task) => (
                 <div
                   key={task.id}
                   onClick={() => handleToggleTask(task.id, task.is_completed)}
-                  className="group flex items-center justify-between p-3 rounded-md hover:bg-slate-50 cursor-pointer border border-transparent hover:border-slate-200 transition-colors"
+                  className="group flex items-center justify-between p-3.5 rounded-md hover:bg-slate-50 active:bg-slate-100 cursor-pointer border border-slate-100 sm:border-transparent sm:hover:border-slate-200 transition-colors gap-3"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <input
                       type="checkbox"
                       checked={task.is_completed}
                       onChange={() => {}}
-                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer"
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer shrink-0"
                     />
                     <span
-                      className={`text-sm ${
+                      className={`text-sm truncate ${
                         task.is_completed ? 'line-through text-slate-400' : 'text-slate-700 font-medium'
                       }`}
                     >
                       {task.title}
                     </span>
                   </div>
+                  
+                  {/* Botão de Excluir: visível no mobile, oculto no desktop até hover */}
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setTaskToDelete({ id: task.id, title: task.title });
                     }}
-                    className="text-xs text-slate-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer px-2 py-1"
+                    className="text-slate-400 hover:text-red-600 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-1.5 -mr-1.5 cursor-pointer shrink-0"
                     title="Excluir tarefa"
                   >
-                    Excluir
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
                   </button>
                 </div>
               ))
