@@ -6,10 +6,11 @@ import { supabase } from '../lib/supabase';
 import CreateProjectModal from '../components/CreateProjectModal';
 import EditProjectModal from '../components/EditProjectModal';
 import ConfirmModal from '../components/ConfirmModal';
+import DashboardStats from '../components/DashboardStats';
 import { ProjectCardSkeleton } from '../components/Skeleton';
 
 interface ProjectWithTasks extends Project {
-  tasks: Pick<Task, 'id' | 'is_completed'>[];
+  tasks: Task[];
 }
 
 export default function Dashboard() {
@@ -25,7 +26,7 @@ export default function Dashboard() {
     setLoading(true);
     const { data, error } = await supabase
       .from('projects')
-      .select('*, tasks(id, is_completed)')
+      .select('*, tasks(*)')
       .order('created_at', { ascending: false });
 
     if (!error && data) {
@@ -61,10 +62,10 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 text-slate-800">
-      <header className="max-w-4xl mx-auto flex justify-between items-center mb-8 pb-4 border-b border-slate-200">
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
+      <header className="max-w-4xl mx-auto flex justify-between items-center mb-6 pb-4 border-b border-slate-200">
         <div>
-          <h1 className="text-xl font-bold">Painel de Metas</h1>
+          <h1 className="text-xl font-bold text-slate-900">Painel de Metas</h1>
           {user && (
             <p className="text-xs text-slate-500">
               Conectado como: <span className="font-medium text-slate-700">{user.user_metadata?.full_name || user.email}</span>
@@ -80,11 +81,15 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-4xl mx-auto space-y-4">
+        {!loading && projects.length > 0 && (
+          <DashboardStats projects={projects} />
+        )}
+
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-sm font-semibold text-slate-700">Seus Projetos ({projects.length})</h2>
           <button
             onClick={() => setIsCreateModalOpen(true)}
-            className="px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
+            className="px-3.5 py-2 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
           >
             + Novo Projeto
           </button>
