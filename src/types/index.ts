@@ -6,3 +6,11 @@ export interface Project {
   deadline: string | null;
   created_at: string;
 }
+
+export interface Task {
+  id: string;
+  project_id: string;
+  title: string;
+  is_completed: boolean;
+  created_at: string;
+}
