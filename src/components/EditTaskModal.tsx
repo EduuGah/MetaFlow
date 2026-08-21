@@ -28,6 +28,7 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
   const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [recurrence, setRecurrence] = useState('none');
   const [notes, setNotes] = useState('');
+  const [deadline, setDeadline] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -37,6 +38,8 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
     setPriority(task.priority ?? 'medium');
     setRecurrence(task.recurrence ?? 'none');
     setNotes(task.notes ?? '');
+    // O input `date` só entende 'YYYY-MM-DD'; o Postgres pode devolver mais.
+    setDeadline(task.deadline?.slice(0, 10) ?? '');
     setError(null);
     setBusy(false);
   }, [open, task]);
@@ -66,6 +69,8 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
         // Nota apagada volta a ser `null`, não string vazia: assim a lista
         // testa um só valor para decidir se mostra o bloco de anotação.
         notes: cleanNotes ? cleanNotes.slice(0, 2000) : null,
+        // Campo de data vazio é string vazia, que o Postgres recusa em `date`.
+        deadline: deadline || null,
       })
       .eq('id', task.id);
     setBusy(false);
@@ -126,6 +131,22 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
               </option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <label htmlFor={`${fieldId}-deadline`} className="field-label">
+            Prazo <span className="text-fg-soft font-normal">(opcional)</span>
+          </label>
+          <input
+            id={`${fieldId}-deadline`}
+            type="date"
+            value={deadline}
+            onChange={(e) => setDeadline(e.target.value)}
+            className="field"
+          />
+          <p className="text-xs text-fg-soft mt-1.5">
+            Independe do prazo do projeto. Serve para a etapa que precisa sair antes do resto.
+          </p>
         </div>
 
         <div>

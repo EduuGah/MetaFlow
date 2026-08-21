@@ -4,32 +4,70 @@ interface Ordered {
 }
 
 /**
- * Ordem de exibição das tarefas.
+ * `position` manda; o desempate é assunto de cada lista.
  *
- * `position` manda; a data de criação só desempata. Linha sem posição vai para
- * o fim — é o caso de uma tarefa criada por uma aba antiga, ou pelo banco
- * antes do backfill: ela aparece embaixo em vez de sumir ou embaralhar as
- * outras. Ordenar aqui, e não no `order()` do Postgres, evita depender de
- * `nulls last` e mantém a mesma regra depois de cada alteração otimista.
+ * Ordenar aqui, e não no `order()` do Postgres, evita depender de `nulls
+ * last`/`nulls first` e mantém a mesma regra valendo depois de cada alteração
+ * otimista na tela — o servidor não é consultado de novo a cada troca.
  */
-export function orderTasks<T extends Ordered>(list: T[]): T[] {
+function byPosition<T extends Ordered>(list: T[], fallback: number, tiebreak: (a: T, b: T) => number): T[] {
   return [...list].sort((a, b) => {
-    const pa = a.position ?? Number.MAX_SAFE_INTEGER;
-    const pb = b.position ?? Number.MAX_SAFE_INTEGER;
-    if (pa !== pb) return pa - pb;
-    return a.created_at.localeCompare(b.created_at);
+    const pa = a.position ?? fallback;
+    const pb = b.position ?? fallback;
+    return pa !== pb ? pa - pb : tiebreak(a, b);
   });
 }
 
 /**
- * Troca de lugar o item de `from` com o vizinho em `to`.
+ * Ordem das tarefas dentro de um projeto.
+ *
+ * Sem posição gravada, a tarefa vai para o **fim**: é onde uma tarefa nova
+ * nasce, e é onde uma linha criada por aba antiga deve cair sem embaralhar as
+ * outras. Entre as sem posição, a mais velha primeiro.
+ */
+export function orderTasks<T extends Ordered>(list: T[]): T[] {
+  return byPosition(list, Number.MAX_SAFE_INTEGER, (a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+/**
+ * Ordem dos projetos no painel.
+ *
+ * O padrão é o inverso do das tarefas, e de propósito: sem posição gravada, o
+ * projeto vai para o **topo**, porque o painel sempre mostrou o mais recente
+ * primeiro e é lá que a pessoa espera ver o projeto que acabou de criar. Entre
+ * os sem posição, o mais novo primeiro — a mesma ordem de antes.
+ */
+export function orderProjects<T extends Ordered>(list: T[]): T[] {
+  return byPosition(list, Number.MIN_SAFE_INTEGER, (a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/**
+ * Tira o item de `from` e o encaixa em `to`.
+ *
+ * Entre vizinhos isso dá no mesmo que trocar os dois de lugar, que é o que as
+ * setas fazem. Num salto maior — o caso do arrastar — tirar-e-encaixar é o que
+ * preserva a ordem de todo mundo que ficou entre as duas pontas; trocar
+ * embaralharia quem não foi tocado.
  * Índice fora da lista devolve o array original, sem cópia inútil.
  */
-export function swap<T>(list: T[], from: number, to: number): T[] {
+export function move<T>(list: T[], from: number, to: number): T[] {
   if (from < 0 || to < 0 || from >= list.length || to >= list.length || from === to) return list;
   const next = [...list];
-  [next[from], next[to]] = [next[to], next[from]];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
   return next;
+}
+
+/**
+ * Para onde vai o item quando é solto antes ou depois de um alvo.
+ *
+ * O desconto quando `from < raw` é o detalhe que sempre escapa: ao arrastar
+ * para baixo, o próprio item some da posição de origem antes de ser encaixado,
+ * então todo índice depois dele anda uma casa para trás.
+ */
+export function dropIndex(from: number, targetIndex: number, side: 'before' | 'after'): number {
+  const raw = side === 'after' ? targetIndex + 1 : targetIndex;
+  return from < raw ? raw - 1 : raw;
 }
 
 /**

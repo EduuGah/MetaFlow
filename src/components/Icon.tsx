@@ -3,9 +3,9 @@ import type { SVGProps } from 'react';
 /**
  * Conjunto de ícones do MetaFlow.
  *
- * Desenhados aqui, não importados de uma biblioteca: são nove formas, todas
- * construídas na mesma grade de 24px com traço de 1.6 e junções arredondadas.
- * Uma biblioteca inteira para nove ícones custaria mais bytes do que o app.
+ * Desenhados aqui, não importados de uma biblioteca: um punhado de formas,
+ * todas na mesma grade de 24px com traço de 1.6 e junções arredondadas. Uma
+ * biblioteca inteira para tão poucos ícones custaria mais bytes do que o app.
  *
  * Regra de uso: ícone só entra quando a ação é repetida e o rótulo em texto
  * não cabe (ações por linha, fechar, alternar). Ação principal sempre tem texto.
@@ -92,9 +92,32 @@ export const IconTrash = (p: IconProps) => (
   </Svg>
 );
 
+/** Divisa. Só para abrir e fechar — nunca para mover. Ver `IconArrowUp`. */
 export const IconChevron = (p: IconProps) => (
   <Svg {...p}>
     <path d="M8.5 5.5 15 12l-6.5 6.5" />
+  </Svg>
+);
+
+/**
+ * Seta com haste, para reordenar.
+ *
+ * Existe separada da divisa por causa de um erro real de leitura: a linha da
+ * tarefa tinha divisa para recolher etapas e divisa girada para subir e descer,
+ * e ninguém distinguia uma da outra. A haste é o que diz "isto percorre uma
+ * distância"; a divisa sozinha só diz "isto abre".
+ */
+export const IconArrowUp = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 19.5V5" />
+    <path d="M5.5 11.5 12 5l6.5 6.5" />
+  </Svg>
+);
+
+export const IconArrowDown = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 4.5V19" />
+    <path d="M5.5 12.5 12 19l6.5-6.5" />
   </Svg>
 );
 

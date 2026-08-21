@@ -6,7 +6,7 @@ import { useToast } from '../context/ToastContext';
 import { useSeo } from '../lib/seo';
 import { reportError, userMessage } from '../lib/logger';
 import { computeProgress } from '../lib/progress';
-import { orderTasks, positionUpdates, swap } from '../lib/order';
+import { dropIndex, move, orderTasks, positionUpdates } from '../lib/order';
 import { descendantsOf } from '../lib/tree';
 import { formatDeadlineLong, getDeadlineInfo } from '../lib/deadline';
 import { findTasksDueForReset, RECURRENCE_OPTIONS } from '../lib/recurrence';
@@ -24,6 +24,13 @@ import { useAuth } from '../context/AuthContext';
 
 type StatusFilter = 'all' | 'pending' | 'done';
 type PriorityFilter = 'all' | 'high' | 'medium' | 'low';
+
+const matchesStatus = (task: Task, filter: StatusFilter) =>
+  filter === 'all' || (filter === 'done' ? task.is_completed : !task.is_completed);
+
+/** Tarefa sem prioridade gravada conta como média — é o padrão do formulário. */
+const matchesPriority = (task: Task, filter: PriorityFilter) =>
+  filter === 'all' || (task.priority ?? 'medium') === filter;
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -45,6 +52,7 @@ export default function ProjectDetail() {
   const [draft, setDraft] = useState('');
   const [draftPriority, setDraftPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [draftRecurrence, setDraftRecurrence] = useState('none');
+  const [draftDeadline, setDraftDeadline] = useState('');
   const [creating, setCreating] = useState(false);
   const draftRef = useRef<HTMLInputElement>(null);
 
@@ -162,6 +170,8 @@ export default function ProjectDetail() {
         parent_id: null,
         priority: draftPriority,
         recurrence: draftRecurrence,
+        // Campo de data vazio é string vazia, que o Postgres recusa em `date`.
+        deadline: draftDeadline || null,
         position: nextPosition(null),
       })
       .select()
@@ -178,6 +188,7 @@ export default function ProjectDetail() {
     setDraft('');
     setDraftPriority('medium');
     setDraftRecurrence('none');
+    setDraftDeadline('');
     setAnnouncement(`Tarefa “${title}” criada.`);
   };
 
@@ -211,16 +222,18 @@ export default function ProjectDetail() {
   };
 
   /**
-   * Move uma tarefa uma casa para cima ou para baixo entre as suas irmãs.
+   * Leva uma tarefa para outra casa entre as suas irmãs.
    *
-   * A renumeração é da lista inteira, mas só as linhas que realmente mudaram
-   * de número vão para o banco — numa lista já numerada isso são duas. A tela
-   * muda antes da resposta; se o banco recusar, ela volta ao estado anterior.
+   * Ponto único de gravação da ordem: as setas e o arrastar chegam os dois
+   * aqui, só diferem em como calculam o destino. A renumeração é da lista
+   * inteira, mas só as linhas que de fato mudaram de número vão para o banco —
+   * numa lista já numerada, duas. A tela muda antes da resposta; se o banco
+   * recusar, ela volta inteira ao estado anterior.
    */
-  const moveTask = async (task: Task, direction: -1 | 1) => {
+  const moveTaskTo = async (task: Task, toIndex: number) => {
     const siblings = tasks.filter((t) => t.parent_id === task.parent_id);
     const from = siblings.findIndex((t) => t.id === task.id);
-    const reordered = swap(siblings, from, from + direction);
+    const reordered = move(siblings, from, toIndex);
     if (reordered === siblings) return;
 
     const updates = positionUpdates(reordered);
@@ -232,7 +245,7 @@ export default function ProjectDetail() {
     setTasks((prev) =>
       orderTasks(prev.map((t) => (byId.has(t.id) ? { ...t, position: byId.get(t.id) as number } : t)))
     );
-    setAnnouncement(`“${task.title}” agora é a ${from + direction + 1}ª de ${siblings.length}.`);
+    setAnnouncement(`“${task.title}” agora é a ${toIndex + 1}ª de ${siblings.length}.`);
 
     const results = await Promise.all(
       updates.map((row) => supabase.from('tasks').update({ position: row.position }).eq('id', row.id))
@@ -244,6 +257,26 @@ export default function ProjectDetail() {
       setTasks(snapshot);
       showToast(userMessage('A nova ordem não foi salva.', failure), 'error');
     }
+  };
+
+  /** Setas ↑/↓: uma casa para cada lado. */
+  const moveTask = (task: Task, direction: -1 | 1) => {
+    const siblings = tasks.filter((t) => t.parent_id === task.parent_id);
+    const from = siblings.findIndex((t) => t.id === task.id);
+    return moveTaskTo(task, from + direction);
+  };
+
+  /**
+   * Arrastar: o alvo é uma linha irmã, e o lado diz se a tarefa entra acima ou
+   * abaixo dela. `dropIndex` faz a correção de índice de quem desce na lista.
+   */
+  const dropTaskOn = (task: Task, target: Task, side: 'before' | 'after') => {
+    if (task.id === target.id || task.parent_id !== target.parent_id) return;
+    const siblings = tasks.filter((t) => t.parent_id === task.parent_id);
+    const from = siblings.findIndex((t) => t.id === task.id);
+    const targetIndex = siblings.findIndex((t) => t.id === target.id);
+    if (from < 0 || targetIndex < 0) return;
+    return moveTaskTo(task, dropIndex(from, targetIndex, side));
   };
 
   /**
@@ -301,6 +334,7 @@ export default function ProjectDetail() {
       recurrence: task.recurrence ?? 'none',
       last_completed_at: task.last_completed_at ?? null,
       notes: task.notes ?? null,
+      deadline: task.deadline ?? null,
       position: task.position ?? null,
       created_at: task.created_at,
     }));
@@ -363,21 +397,43 @@ export default function ProjectDetail() {
 
   const mainTasks = useMemo(() => tasks.filter((t) => !t.parent_id), [tasks]);
 
-  const visibleTasks = useMemo(() => {
+  /** O que a busca alcança, antes dos dois seletores entrarem. */
+  const searchedTasks = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return mainTasks.filter((task) => {
-      if (statusFilter === 'pending' && task.is_completed) return false;
-      if (statusFilter === 'done' && !task.is_completed) return false;
-      if (priorityFilter !== 'all' && (task.priority ?? 'medium') !== priorityFilter) return false;
-      if (!term) return true;
-      // A busca desce a árvore inteira: achar "tinta" na subetapa tem de
-      // trazer à tona a tarefa de topo que a contém, senão o resultado some.
-      return (
+    if (!term) return mainTasks;
+
+    // A busca desce a árvore inteira: achar "tinta" na subetapa tem de trazer
+    // à tona a tarefa de topo que a contém, senão o resultado some.
+    return mainTasks.filter(
+      (task) =>
         task.title.toLowerCase().includes(term) ||
         descendantsOf(tasks, task.id).some((step) => step.title.toLowerCase().includes(term))
-      );
-    });
-  }, [mainTasks, tasks, search, statusFilter, priorityFilter]);
+    );
+  }, [mainTasks, tasks, search]);
+
+  const visibleTasks = useMemo(
+    () => searchedTasks.filter((t) => matchesStatus(t, statusFilter) && matchesPriority(t, priorityFilter)),
+    [searchedTasks, statusFilter, priorityFilter]
+  );
+
+  /**
+   * Quantas tarefas caem em cada opção dos seletores.
+   *
+   * Cada seletor conta com o outro já aplicado: com "Alta" ligado, "Em aberto"
+   * diz quantas altas estão em aberto, não o total do projeto. Um número que
+   * não bate com o que a lista mostra em seguida é pior do que número nenhum.
+   */
+  const statusCounts = useMemo(() => {
+    const pool = searchedTasks.filter((t) => matchesPriority(t, priorityFilter));
+    const done = pool.filter((t) => t.is_completed).length;
+    return { all: pool.length, pending: pool.length - done, done };
+  }, [searchedTasks, priorityFilter]);
+
+  const priorityCounts = useMemo(() => {
+    const pool = searchedTasks.filter((t) => matchesStatus(t, statusFilter));
+    const count = (level: PriorityFilter) => pool.filter((t) => matchesPriority(t, level)).length;
+    return { all: pool.length, high: count('high'), medium: count('medium'), low: count('low') };
+  }, [searchedTasks, statusFilter]);
 
   const progress = computeProgress(tasks);
   const filtersActive = Boolean(search.trim()) || statusFilter !== 'all' || priorityFilter !== 'all';
@@ -570,6 +626,21 @@ export default function ProjectDetail() {
                       ))}
                     </select>
                   </div>
+                  {/* O prazo ocupa a linha inteira abaixo dos dois seletores:
+                      um campo de data espremido em meia coluna fica ilegível
+                      no celular, onde o formato já é longo. */}
+                  <div className="col-span-2">
+                    <label className="sr-only" htmlFor="new-deadline">
+                      Prazo da nova tarefa
+                    </label>
+                    <input
+                      id="new-deadline"
+                      type="date"
+                      value={draftDeadline}
+                      onChange={(e) => setDraftDeadline(e.target.value)}
+                      className="field py-2 text-xs"
+                    />
+                  </div>
                 </div>
               )}
             </form>
@@ -599,11 +670,11 @@ export default function ProjectDetail() {
                   id="filter-status"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-                  className="field py-2 text-xs sm:w-40"
+                  className="field py-2 text-xs sm:w-44"
                 >
-                  <option value="all">Todas as situações</option>
-                  <option value="pending">Em aberto</option>
-                  <option value="done">Concluídas</option>
+                  <option value="all">Todas as situações ({statusCounts.all})</option>
+                  <option value="pending">Em aberto ({statusCounts.pending})</option>
+                  <option value="done">Concluídas ({statusCounts.done})</option>
                 </select>
 
                 <label className="sr-only" htmlFor="filter-priority">
@@ -613,12 +684,12 @@ export default function ProjectDetail() {
                   id="filter-priority"
                   value={priorityFilter}
                   onChange={(e) => setPriorityFilter(e.target.value as PriorityFilter)}
-                  className="field py-2 text-xs sm:w-40"
+                  className="field py-2 text-xs sm:w-44"
                 >
-                  <option value="all">Todas as prioridades</option>
-                  <option value="high">Alta</option>
-                  <option value="medium">Média</option>
-                  <option value="low">Baixa</option>
+                  <option value="all">Todas as prioridades ({priorityCounts.all})</option>
+                  <option value="high">Alta ({priorityCounts.high})</option>
+                  <option value="medium">Média ({priorityCounts.medium})</option>
+                  <option value="low">Baixa ({priorityCounts.low})</option>
                 </select>
               </div>
             </div>
@@ -658,6 +729,7 @@ export default function ProjectDetail() {
               onDelete={setTaskToDelete}
               onAddSubtask={addSubtask}
               onReorder={moveTask}
+              onDropOn={dropTaskOn}
             />
           ) : (
             <TaskBoard

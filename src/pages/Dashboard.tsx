@@ -8,6 +8,7 @@ import { useSeo } from '../lib/seo';
 import { reportError, userMessage } from '../lib/logger';
 import { getDeadlineInfo, type DeadlineStatus } from '../lib/deadline';
 import { computeProgress } from '../lib/progress';
+import { move, orderProjects, positionUpdates } from '../lib/order';
 import AppHeader from '../components/AppHeader';
 import DashboardStats from '../components/DashboardStats';
 import DeadlineAlerts from '../components/DeadlineAlerts';
@@ -16,7 +17,7 @@ import ProjectFormModal from '../components/ProjectFormModal';
 import { DEFAULT_CATEGORIES } from '../lib/categories';
 import ConfirmModal from '../components/ConfirmModal';
 import { ProjectRowSkeleton, StatsSkeleton } from '../components/Skeleton';
-import { IconEdit, IconPlus, IconTrash } from '../components/Icon';
+import { IconArrowDown, IconArrowUp, IconEdit, IconPlus, IconSearch, IconTrash } from '../components/Icon';
 
 interface ProjectWithTasks extends Project {
   tasks: Task[];
@@ -46,7 +47,9 @@ export default function Dashboard() {
   const [projects, setProjects] = useState<ProjectWithTasks[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
 
+  const [search, setSearch] = useState('');
   const [area, setArea] = useState('Todas');
   const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>('all');
 
@@ -72,7 +75,8 @@ export default function Dashboard() {
       return;
     }
 
-    setProjects((data ?? []) as ProjectWithTasks[]);
+    // A consulta vem por data de criação; a ordem que vale é a manual.
+    setProjects(orderProjects((data ?? []) as ProjectWithTasks[]));
     setLoading(false);
   }, []);
 
@@ -100,15 +104,59 @@ export default function Dashboard() {
 
   const visible = useMemo(() => {
     const rule = DEADLINE_FILTERS.find((f) => f.id === deadlineFilter) ?? DEADLINE_FILTERS[0];
+    const term = search.trim().toLowerCase();
+
     return projects.filter((p) => {
       if (area !== 'Todas' && (p.category || 'Geral') !== area) return false;
-      return rule.matches(getDeadlineInfo(p.deadline).status);
+      if (!rule.matches(getDeadlineInfo(p.deadline).status)) return false;
+      if (!term) return true;
+      return matchesTerm(p, term);
     });
-  }, [projects, area, deadlineFilter]);
+  }, [projects, search, area, deadlineFilter]);
 
   const clearFilters = () => {
+    setSearch('');
     setArea('Todas');
     setDeadlineFilter('all');
+  };
+
+  const filtersActive = Boolean(search.trim()) || area !== 'Todas' || deadlineFilter !== 'all';
+
+  /**
+   * Sobe ou desce um projeto uma casa no painel.
+   *
+   * Mesma mecânica da ordem das tarefas: renumera a lista toda, manda ao banco
+   * só as linhas que mudaram de número, e desfaz na tela se a gravação falhar.
+   * Só funciona com a lista inteira à vista — com busca ou filtro ligado as
+   * setas ficam desabilitadas, senão "para cima" mandaria o projeto para uma
+   * posição que ninguém está enxergando.
+   */
+  const moveProject = async (project: ProjectWithTasks, direction: -1 | 1) => {
+    const from = projects.findIndex((p) => p.id === project.id);
+    const reordered = move(projects, from, from + direction);
+    if (reordered === projects) return;
+
+    const updates = positionUpdates(reordered);
+    if (updates.length === 0) return;
+
+    const snapshot = projects;
+    const byId = new Map(updates.map((row) => [row.id, row.position]));
+
+    setProjects((prev) =>
+      orderProjects(prev.map((p) => (byId.has(p.id) ? { ...p, position: byId.get(p.id) as number } : p)))
+    );
+    setAnnouncement(`“${project.title}” agora é o ${from + direction + 1}º de ${projects.length}.`);
+
+    const results = await Promise.all(
+      updates.map((row) => supabase.from('projects').update({ position: row.position }).eq('id', row.id))
+    );
+    const failure = results.find((result) => result.error)?.error;
+
+    if (failure) {
+      reportError('project.reorder', failure, { projectId: project.id });
+      setProjects(snapshot);
+      showToast(userMessage('A nova ordem não foi salva.', failure), 'error');
+    }
   };
 
   const handleDelete = async () => {
@@ -207,6 +255,22 @@ export default function Dashboard() {
             <DashboardStats projects={projects} />
 
             <div className="space-y-3">
+              {/* A busca vem antes dos filtros porque é o caminho mais curto
+                  quando você já sabe o nome — filtro é para quando não sabe. */}
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-soft pointer-events-none">
+                  <IconSearch size={15} />
+                </span>
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar projeto, área ou tarefa"
+                  aria-label="Buscar projeto, área ou tarefa"
+                  className="field pl-9 py-2"
+                />
+              </div>
+
               <FilterRow
                 legend="Prazo"
                 options={DEADLINE_FILTERS.map((f) => ({
@@ -227,18 +291,27 @@ export default function Dashboard() {
 
             {visible.length === 0 ? (
               <div className="panel p-10 text-center">
-                <p className="text-fg">Nenhum projeto nesses filtros.</p>
-                <button type="button" onClick={clearFilters} className="btn btn-secondary mt-5">
-                  Limpar filtros
-                </button>
+                <p className="text-fg">
+                  {search.trim() ? `Nada encontrado para “${search.trim()}”.` : 'Nenhum projeto nesses filtros.'}
+                </p>
+                {filtersActive && (
+                  <button type="button" onClick={clearFilters} className="btn btn-secondary mt-5">
+                    Limpar busca e filtros
+                  </button>
+                )}
               </div>
             ) : (
               <>
                 <ul className="panel overflow-hidden divide-y divide-edge">
-                  {visible.map((project) => (
+                  {visible.map((project, index) => (
                     <ProjectRow
                       key={project.id}
                       project={project}
+                      reorderable={!filtersActive}
+                      isFirst={index === 0}
+                      isLast={index === visible.length - 1}
+                      showReorder={visible.length > 1}
+                      onReorder={moveProject}
                       onEdit={() => {
                         setEditing(project);
                         setFormOpen(true);
@@ -248,7 +321,7 @@ export default function Dashboard() {
                   ))}
                 </ul>
                 <p aria-live="polite" className="sr-only">
-                  {visible.length} projetos exibidos.
+                  {announcement || `${visible.length} projetos exibidos.`}
                 </p>
               </>
             )}
@@ -297,12 +370,37 @@ export default function Dashboard() {
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * O que a busca do painel enxerga.
+ *
+ * Título, descrição e área do projeto — e também os títulos das tarefas
+ * dentro dele. Procurar "dentista" e não achar o projeto "Saúde" que tem essa
+ * tarefa seria uma busca que mente; as tarefas já vêm na mesma consulta, então
+ * olhar para elas não custa uma ida a mais ao banco.
+ */
+function matchesTerm(project: ProjectWithTasks, term: string): boolean {
+  if (project.title.toLowerCase().includes(term)) return true;
+  if (project.description?.toLowerCase().includes(term)) return true;
+  if ((project.category ?? 'Geral').toLowerCase().includes(term)) return true;
+  return project.tasks?.some((task) => task.title.toLowerCase().includes(term)) ?? false;
+}
+
 function ProjectRow({
   project,
+  reorderable,
+  isFirst,
+  isLast,
+  showReorder,
+  onReorder,
   onEdit,
   onDelete,
 }: {
   project: ProjectWithTasks;
+  reorderable: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+  showReorder: boolean;
+  onReorder: (project: ProjectWithTasks, direction: -1 | 1) => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -323,6 +421,34 @@ function ProjectRow({
     // destino, sem elemento interativo aninhado, e um alvo de toque grande no
     // celular. Os botões de ação ficam acima dele com `relative`.
     <li className="relative flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3.5 sm:py-4 hover:bg-raised transition-colors">
+      {/* As setas precisam de `relative`: o link do título cobre a linha
+          inteira com um pseudo-elemento, e sem isso elas ficariam por baixo
+          dele — clicar em "subir" abriria o projeto. */}
+      {showReorder && (
+        <div className="relative flex flex-col shrink-0 -ml-1">
+          <button
+            type="button"
+            disabled={!reorderable || isFirst}
+            onClick={() => onReorder(project, -1)}
+            title={reorderable ? 'Mover para cima' : 'Limpe a busca e os filtros para reordenar'}
+            className="btn-icon h-6 w-6 disabled:opacity-30"
+            aria-label={`Mover o projeto ${project.title} para cima`}
+          >
+            <IconArrowUp size={13} />
+          </button>
+          <button
+            type="button"
+            disabled={!reorderable || isLast}
+            onClick={() => onReorder(project, 1)}
+            title={reorderable ? 'Mover para baixo' : 'Limpe a busca e os filtros para reordenar'}
+            className="btn-icon h-6 w-6 disabled:opacity-30"
+            aria-label={`Mover o projeto ${project.title} para baixo`}
+          >
+            <IconArrowDown size={13} />
+          </button>
+        </div>
+      )}
+
       <ProgressDial value={percent} size={48} label={`Progresso de ${project.title}`} tone={done === 0 ? 'signal' : 'flow'} />
 
       <div className="min-w-0 flex-1">

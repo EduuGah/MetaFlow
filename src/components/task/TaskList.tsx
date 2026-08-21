@@ -3,8 +3,8 @@ import type { Task } from '../../types';
 import { computeProgress } from '../../lib/progress';
 import { MAX_DEPTH } from '../../lib/tree';
 import { cn } from '../../lib/utils';
-import { IconChevron, IconEdit, IconPlus, IconTrash } from '../Icon';
-import { PriorityBadge, RecurrenceBadge } from './TaskBadges';
+import { IconArrowDown, IconArrowUp, IconChevron, IconEdit, IconPlus, IconTrash } from '../Icon';
+import { PriorityBadge, RecurrenceBadge, TaskDeadlineBadge } from './TaskBadges';
 
 export interface TaskHandlers {
   onToggle: (task: Task) => void;
@@ -14,11 +14,17 @@ export interface TaskHandlers {
   onReorder: (task: Task, direction: -1 | 1) => void;
 }
 
+export type DropSide = 'before' | 'after';
+
+/** Tipo próprio no dataTransfer: a lista não aceita arquivo, texto nem card do quadro. */
+const DRAG_TYPE = 'application/x-metaflow-step';
+
 interface TaskListProps extends TaskHandlers {
   tasks: Task[];
   subtasksOf: (id: string) => Task[];
   /** Falso enquanto houver busca ou filtro: "para cima" não teria sentido. */
   reorderable: boolean;
+  onDropOn: (task: Task, target: Task, side: DropSide) => void;
 }
 
 /**
@@ -59,8 +65,24 @@ export default function TaskList({
   onDelete,
   onAddSubtask,
   onReorder,
+  onDropOn,
 }: TaskListProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const [dragging, setDragging] = useState<Task | null>(null);
+  const [dropAt, setDropAt] = useState<{ id: string; side: DropSide } | null>(null);
+
+  const endDrag = useCallback(() => {
+    setDragging(null);
+    setDropAt(null);
+  }, []);
+
+  const drop = useCallback(
+    (target: Task, side: DropSide) => {
+      if (dragging) onDropOn(dragging, target, side);
+      endDrag();
+    },
+    [dragging, onDropOn, endDrag]
+  );
 
   const toggleCollapsed = useCallback((id: string) => {
     setCollapsed((prev) => {
@@ -89,6 +111,12 @@ export default function TaskList({
           collapsed={collapsed}
           onToggleCollapsed={toggleCollapsed}
           reorderable={reorderable}
+          dragging={dragging}
+          dropAt={dropAt}
+          onDragStartTask={setDragging}
+          onDragOverTask={setDropAt}
+          onDragEndTask={endDrag}
+          onDropTask={drop}
           onToggle={onToggle}
           onEdit={onEdit}
           onDelete={onDelete}
@@ -100,6 +128,16 @@ export default function TaskList({
   );
 }
 
+/** Estado do arrasto que todo nível precisa enxergar, repassado sem alteração. */
+interface DragBus {
+  dragging: Task | null;
+  dropAt: { id: string; side: DropSide } | null;
+  onDragStartTask: (task: Task) => void;
+  onDragOverTask: (at: { id: string; side: DropSide }) => void;
+  onDragEndTask: () => void;
+  onDropTask: (target: Task, side: DropSide) => void;
+}
+
 function TaskNode({
   task,
   depth,
@@ -109,24 +147,32 @@ function TaskNode({
   collapsed,
   onToggleCollapsed,
   reorderable,
+  dragging,
+  dropAt,
+  onDragStartTask,
+  onDragOverTask,
+  onDragEndTask,
+  onDropTask,
   onToggle,
   onEdit,
   onDelete,
   onAddSubtask,
   onReorder,
-}: TaskHandlers & {
-  task: Task;
-  depth: number;
-  index: number;
-  siblingCount: number;
-  subtasksOf: (id: string) => Task[];
-  collapsed: Set<string>;
-  onToggleCollapsed: (id: string) => void;
-  reorderable: boolean;
-}) {
+}: TaskHandlers &
+  DragBus & {
+    task: Task;
+    depth: number;
+    index: number;
+    siblingCount: number;
+    subtasksOf: (id: string) => Task[];
+    collapsed: Set<string>;
+    onToggleCollapsed: (id: string) => void;
+    reorderable: boolean;
+  }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  const [grabbable, setGrabbable] = useState(false);
 
   const children = subtasksOf(task.id);
   const progress = computeProgress(children);
@@ -151,14 +197,83 @@ function TaskNode({
   const actionSize = isRoot ? 'h-8 w-8 sm:h-9 sm:w-9' : 'h-7 w-7';
   const iconSize = isRoot ? 16 : 14;
 
+  /**
+   * Arrastar só entre irmãs.
+   *
+   * Soltar uma tarefa dentro de outra seria reparentar, que é outra operação:
+   * mudaria a profundidade, poderia estourar o limite de níveis e, com o
+   * alvo errado, criaria um ciclo. Aqui a linha só aceita quem já divide o
+   * mesmo pai — reordenar, nada mais.
+   */
+  const acceptsDrop =
+    reorderable && dragging !== null && dragging.id !== task.id && dragging.parent_id === task.parent_id;
+
+  const marker = dropAt?.id === task.id && acceptsDrop ? dropAt.side : null;
+
+  // O mesmo truque do quadro: com `draggable` fixo, o clique nos botões e nos
+  // campos vira início de arrasto. Decidir no pointerdown resolve os dois.
+  const armDrag = (event: React.PointerEvent) => {
+    const origin = event.target as HTMLElement | null;
+    setGrabbable(reorderable && !origin?.closest('button, select, input, label, a, textarea'));
+  };
+
   return (
-    <li className={isRoot ? 'px-4 sm:px-5 py-3.5' : 'py-1'}>
-      <div className="flex items-start gap-2.5 sm:gap-3 group">
-        {/* Setas de ordem numa coluna de 24px — o mínimo de alvo que a WCAG
-            2.2 aceita, e o que cabe sem espremer o título no celular. Elas
-            ficam desabilitadas com filtro ligado: mover para cima numa lista
-            filtrada moveria a tarefa para um lugar que ninguém está vendo. */}
-        {siblingCount > 1 && (
+    <li className={cn('relative', isRoot ? 'px-4 sm:px-5 py-4' : 'py-1')}>
+      {/* Fio de encaixe: mostra exatamente onde a linha vai parar. Sem ele o
+          arrasto é adivinhação, e adivinhação em lista longa é erro. */}
+      <DropLine visible={marker === 'before'} side="before" />
+
+      <div
+        className="flex items-start gap-2.5 sm:gap-3 group transition-opacity"
+        draggable={grabbable}
+        onPointerDown={armDrag}
+        onDragStart={(event) => {
+          event.dataTransfer.setData(DRAG_TYPE, task.id);
+          event.dataTransfer.effectAllowed = 'move';
+          onDragStartTask(task);
+        }}
+        onDragEnd={() => {
+          setGrabbable(false);
+          onDragEndTask();
+        }}
+        onDragOver={(event) => {
+          if (!acceptsDrop) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          const box = event.currentTarget.getBoundingClientRect();
+          onDragOverTask({ id: task.id, side: event.clientY < box.top + box.height / 2 ? 'before' : 'after' });
+        }}
+        onDrop={(event) => {
+          if (!acceptsDrop || !marker) return;
+          event.preventDefault();
+          onDropTask(task, marker);
+        }}
+        style={{
+          opacity: dragging?.id === task.id ? 0.4 : 1,
+          cursor: grabbable ? 'grab' : undefined,
+        }}
+      >
+        {/* Coluna de ordem, só nas tarefas de topo.
+
+            Duas decisões vieram de confusão real na tela. A primeira: seta com
+            haste, não divisa — a divisa já é o controle de abrir e fechar
+            etapas, e as duas juntas na mesma linha viravam a mesma coisa aos
+            olhos. A segunda: as etapas não têm esta coluna. Com ela em todos os
+            níveis, cada recuo ganhava um segundo corredor de ícones à esquerda
+            e a hierarquia sumia; agora a coluna presente já significa "esta é
+            uma tarefa de topo". Etapa se reordena arrastando.
+
+            24px é o alvo mínimo que a WCAG 2.2 aceita, e o que cabe sem
+            espremer o título no celular. Com filtro ligado as setas ficam
+            desabilitadas: mover para cima numa lista filtrada mandaria a
+            tarefa para um lugar que ninguém está vendo. */}
+        {/* Com uma tarefa só não há o que reordenar, mas a coluna continua
+            reservada: ela é a régua a partir da qual as etapas se recuam, e
+            somem-e-voltam faria a lista inteira escorregar de lado quando a
+            segunda tarefa nascesse. */}
+        {isRoot && siblingCount <= 1 && <div className="w-6 shrink-0 -ml-1" aria-hidden="true" />}
+
+        {isRoot && siblingCount > 1 && (
           <div className="flex flex-col shrink-0 -ml-1 mt-px">
             <button
               type="button"
@@ -168,7 +283,7 @@ function TaskNode({
               className="btn-icon h-6 w-6 disabled:opacity-30"
               aria-label={`Mover ${task.title} para cima`}
             >
-              <IconChevron size={13} style={{ transform: 'rotate(-90deg)' }} />
+              <IconArrowUp size={13} />
             </button>
             <button
               type="button"
@@ -178,7 +293,7 @@ function TaskNode({
               className="btn-icon h-6 w-6 disabled:opacity-30"
               aria-label={`Mover ${task.title} para baixo`}
             >
-              <IconChevron size={13} style={{ transform: 'rotate(90deg)' }} />
+              <IconArrowDown size={13} />
             </button>
           </div>
         )}
@@ -194,15 +309,19 @@ function TaskNode({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Três pesos para três níveis. Só o recuo não bastava: com o
+                mesmo tipo em todos, uma etapa de segundo nível parecia uma
+                tarefa que tinha escorregado para a direita. */}
             <span
               className={cn(
-                isRoot ? 'font-medium text-[0.9375rem]' : 'text-sm',
+                isRoot ? 'font-semibold text-[0.9375rem]' : depth === 1 ? 'text-sm font-medium' : 'text-sm',
                 task.is_completed ? 'line-through text-fg-soft' : isRoot ? 'text-fg' : 'text-fg-muted'
               )}
             >
               {task.title}
             </span>
             <PriorityBadge priority={task.priority} quiet={!isRoot} />
+            <TaskDeadlineBadge deadline={task.deadline} done={task.is_completed} />
             <RecurrenceBadge recurrence={task.recurrence} />
           </div>
 
@@ -308,6 +427,8 @@ function TaskNode({
         </div>
       </div>
 
+      <DropLine visible={marker === 'after'} side="after" />
+
       {composerOpen && (
         <form onSubmit={submitSubtask} className="flex gap-2 mt-3 ml-9">
           <input
@@ -327,8 +448,21 @@ function TaskNode({
         </form>
       )}
 
+      {/* O fio que segura a subárvore muda de traço a cada nível: cheio e
+          grosso sob a tarefa, tracejado e fino sob a etapa. Cheio-versus-
+          tracejado se distingue de relance; dois recuos iguais, não. */}
       {children.length > 0 && !isCollapsed && (
-        <ul id={stepsId} className="mt-2.5 ml-3 pl-4 border-l border-edge space-y-0.5 animate-rise">
+        <ul
+          id={stepsId}
+          className={cn(
+            'space-y-0.5 animate-rise',
+            // 2.6rem alinha o fio com o centro do checkbox da tarefa acima. O
+            // valor tem de contar a coluna de ordem, que só existe na raiz:
+            // sem isso as etapas ficavam a 4px da tarefa e o nível sumia.
+            isRoot ? 'mt-3 ml-[2.6rem] pl-4 border-l-2' : 'mt-2 ml-2 pl-4 border-l border-dashed'
+          )}
+          style={{ borderColor: isRoot ? 'var(--c-edge-strong)' : 'var(--c-edge)' }}
+        >
           {children.map((child, childIndex) => (
             <TaskNode
               key={child.id}
@@ -340,6 +474,12 @@ function TaskNode({
               collapsed={collapsed}
               onToggleCollapsed={onToggleCollapsed}
               reorderable={reorderable}
+              dragging={dragging}
+              dropAt={dropAt}
+              onDragStartTask={onDragStartTask}
+              onDragOverTask={onDragOverTask}
+              onDragEndTask={onDragEndTask}
+              onDropTask={onDropTask}
               onToggle={onToggle}
               onEdit={onEdit}
               onDelete={onDelete}
@@ -350,5 +490,22 @@ function TaskNode({
         </ul>
       )}
     </li>
+  );
+}
+
+/**
+ * O fio que marca onde a linha arrastada vai encaixar.
+ *
+ * Posicionado por cima da linha, não no fluxo: no fluxo ele somaria altura em
+ * toda tarefa da lista, arrastando ou não, para aparecer em uma só.
+ */
+function DropLine({ visible, side }: { visible: boolean; side: DropSide }) {
+  if (!visible) return null;
+  return (
+    <span
+      aria-hidden="true"
+      className={cn('absolute left-0 right-0 h-0.5 rounded-full z-10', side === 'before' ? 'top-0' : 'bottom-0')}
+      style={{ background: 'var(--c-signal)' }}
+    />
   );
 }

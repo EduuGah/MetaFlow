@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Task } from '../../types';
 import { computeProgress } from '../../lib/progress';
 import { IconEdit, IconTrash } from '../Icon';
-import { PriorityBadge, RecurrenceBadge } from './TaskBadges';
+import { PriorityBadge, RecurrenceBadge, TaskDeadlineBadge } from './TaskBadges';
 import { BOARD_COLUMNS, statusOf, type BoardStatus } from './board';
 
 interface TaskBoardProps {
@@ -195,6 +195,7 @@ function BoardCard({
 
       <div className="flex flex-wrap gap-1.5 mt-2.5">
         <PriorityBadge priority={task.priority} />
+        <TaskDeadlineBadge deadline={task.deadline} done={task.is_completed} />
         <RecurrenceBadge recurrence={task.recurrence} />
       </div>
 

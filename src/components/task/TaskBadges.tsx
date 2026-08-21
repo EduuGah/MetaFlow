@@ -1,5 +1,6 @@
+import { getDeadlineInfo } from '../../lib/deadline';
 import { RECURRENCE_LABELS } from '../../lib/recurrence';
-import { IconRepeat } from '../Icon';
+import { IconDeadline, IconRepeat } from '../Icon';
 
 /**
  * Três níveis, três pesos visuais.
@@ -30,6 +31,35 @@ export function PriorityBadge({ priority, quiet = false }: { priority?: string |
 
   // Sem prioridade gravada, a tarefa é média — é o padrão do formulário.
   return <span className="chip chip-static text-2xs">Média</span>;
+}
+
+/**
+ * Prazo da tarefa, com a mesma leitura do prazo de projeto.
+ *
+ * `getDeadlineInfo` é o único lugar que decide o que é atraso, o que vence
+ * hoje e o que ainda dá tempo — reaproveitá-lo aqui garante que "Vence hoje"
+ * significa a mesma coisa no painel e dentro do projeto. Tarefa concluída
+ * perde a cor: um prazo vencido de algo que já foi feito é ruído vermelho.
+ */
+export function TaskDeadlineBadge({ deadline, done = false }: { deadline?: string | null; done?: boolean }) {
+  const info = getDeadlineInfo(deadline);
+  if (info.status === 'none') return null;
+
+  const tone =
+    done || info.tone === null
+      ? undefined
+      : info.tone === 'alert'
+        ? { color: 'var(--c-alert)', borderColor: 'var(--c-alert)' }
+        : info.tone === 'signal'
+          ? { color: 'var(--c-signal)', borderColor: 'var(--c-signal)' }
+          : { color: 'var(--c-flow)' };
+
+  return (
+    <span className={`chip chip-static text-2xs${done ? ' text-fg-soft' : ''}`} style={tone}>
+      <IconDeadline size={11} />
+      {info.label}
+    </span>
+  );
 }
 
 export function RecurrenceBadge({ recurrence }: { recurrence?: string | null }) {
