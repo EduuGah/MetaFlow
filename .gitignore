@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Rascunhos de mensagem de commit (uso com git commit -F)
+COMMIT_MSG*.txt
