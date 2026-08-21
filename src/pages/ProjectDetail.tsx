@@ -1,812 +1,693 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import type { Project, Task } from '../types';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../context/ToastContext';
+import { useSeo } from '../lib/seo';
+import { reportError, userMessage } from '../lib/logger';
+import { computeProgress } from '../lib/progress';
+import { formatDeadlineLong, getDeadlineInfo } from '../lib/deadline';
+import { findTasksDueForReset, RECURRENCE_OPTIONS } from '../lib/recurrence';
+import AppHeader from '../components/AppHeader';
+import ProgressDial from '../components/ProgressDial';
 import ConfirmModal from '../components/ConfirmModal';
 import EditTaskModal from '../components/EditTaskModal';
-import EditProjectModal from '../components/EditProjectModal';
+import ProjectFormModal from '../components/ProjectFormModal';
 import { Skeleton, TaskSkeleton } from '../components/Skeleton';
+import TaskList from '../components/task/TaskList';
+import TaskBoard from '../components/task/TaskBoard';
+import { statusOf, type BoardStatus } from '../components/task/board';
+import { IconBoard, IconList, IconPlus, IconSearch } from '../components/Icon';
+import { useAuth } from '../context/AuthContext';
 
-const RECURRENCE_LABELS: Record<string, string> = {
-  '15m': 'A cada 15 min',
-  '30m': 'A cada 30 min',
-  '1h': 'A cada 1 hora',
-  '6h': 'A cada 6 horas',
-  '12h': 'A cada 12 horas',
-  daily: 'Diária',
-  weekly: 'Semanal',
-};
-
-const PRIORITY_STYLES: Record<string, { label: string; style: string }> = {
-  high: { label: 'Alta', style: 'bg-red-50 text-red-700 border-red-200' },
-  medium: { label: 'Média', style: 'bg-amber-50 text-amber-700 border-amber-200' },
-  low: { label: 'Baixa', style: 'bg-slate-100 text-slate-600 border-slate-200' },
-};
+type StatusFilter = 'all' | 'pending' | 'done';
+type PriorityFilter = 'all' | 'high' | 'medium' | 'low';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
+  const { user } = useAuth();
   const { showToast } = useToast();
+
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
-
-  // Form de Criação
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskPriority, setNewTaskPriority] = useState<'low' | 'medium' | 'high'>('medium');
-  const [newTaskRecurrence, setNewTaskRecurrence] = useState<string>('none');
-  const [subtaskTitleMap, setSubtaskTitleMap] = useState<Record<string, string>>({});
-  const [activeSubtaskInput, setActiveSubtaskInput] = useState<string | null>(null);
-  const [expandedKanbanTasks, setExpandedKanbanTasks] = useState<Record<string, boolean>>({});
-  
-  // Filtros
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
-  const [priorityFilter, setPriorityFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
-
-  const [taskError, setTaskError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [announcement, setAnnouncement] = useState('');
 
-  const [isEditProjectOpen, setIsEditProjectOpen] = useState(false);
+  const [view, setView] = useState<'list' | 'board'>('list');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
+
+  const [draft, setDraft] = useState('');
+  const [draftPriority, setDraftPriority] = useState<'low' | 'medium' | 'high'>('medium');
+  const [draftRecurrence, setDraftRecurrence] = useState('none');
+  const [creating, setCreating] = useState(false);
+  const draftRef = useRef<HTMLInputElement>(null);
+
+  const [projectFormOpen, setProjectFormOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
-  const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
 
-  const checkAndResetRecurrentTasks = useCallback(async (fetchedTasks: Task[]) => {
-    const now = new Date();
-    const tasksToResetIds: string[] = [];
+  useSeo({
+    path: `/dashboard/${id ?? ''}`,
+    title: project ? project.title : 'Projeto',
+    description: 'Tarefas, etapas e progresso do projeto no MetaFlow.',
+    noindex: true,
+  });
 
-    fetchedTasks.forEach((task) => {
-      if (!task.is_completed || !task.last_completed_at || !task.recurrence || task.recurrence === 'none') {
-        return;
-      }
+  /* ---------------- carga ---------------- */
 
-      const completedDate = new Date(task.last_completed_at);
-      const diffMinutes = (now.getTime() - completedDate.getTime()) / (1000 * 60);
-
-      let shouldReset = false;
-
-      switch (task.recurrence) {
-        case '15m': shouldReset = diffMinutes >= 15; break;
-        case '30m': shouldReset = diffMinutes >= 30; break;
-        case '1h': shouldReset = diffMinutes >= 60; break;
-        case '6h': shouldReset = diffMinutes >= 360; break;
-        case '12h': shouldReset = diffMinutes >= 720; break;
-        case 'daily': shouldReset = diffMinutes >= 1440; break;
-        case 'weekly': shouldReset = diffMinutes >= 10080; break;
-      }
-
-      if (shouldReset) tasksToResetIds.push(task.id);
-    });
-
-    if (tasksToResetIds.length > 0) {
-      await supabase
-        .from('tasks')
-        .update({ is_completed: false, status: 'todo' })
-        .in('id', tasksToResetIds);
-
-      return fetchedTasks.map((t) =>
-        tasksToResetIds.includes(t.id) ? { ...t, is_completed: false, status: 'todo' as const } : t
-      );
-    }
-
-    return fetchedTasks;
-  }, []);
-
-  const fetchProjectData = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
+    setLoadError(null);
+    setNotFound(false);
 
     const [projectRes, tasksRes] = await Promise.all([
-      supabase.from('projects').select('*').eq('id', id).single(),
+      supabase.from('projects').select('*').eq('id', id).maybeSingle(),
       supabase.from('tasks').select('*').eq('project_id', id).order('created_at', { ascending: true }),
     ]);
 
-    if (!projectRes.error && projectRes.data) {
-      setProject(projectRes.data);
+    // Distinguir "não existe" de "deu erro" importa: a primeira situação é um
+    // beco sem saída e a segunda tem conserto. Antes as duas caíam na mesma
+    // frase, "Projeto não encontrado".
+    if (projectRes.error || tasksRes.error) {
+      reportError('project.load', projectRes.error ?? tasksRes.error, { projectId: id });
+      setLoadError(userMessage('Não conseguimos abrir este projeto.', projectRes.error ?? tasksRes.error));
+      setLoading(false);
+      return;
     }
 
-    if (!tasksRes.error && tasksRes.data) {
-      const processedTasks = await checkAndResetRecurrentTasks(tasksRes.data as Task[]);
-      setTasks(processedTasks);
+    if (!projectRes.data) {
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+
+    setProject(projectRes.data as Project);
+
+    const fetched = (tasksRes.data ?? []) as Task[];
+    const dueForReset = findTasksDueForReset(fetched);
+
+    if (dueForReset.length > 0) {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ is_completed: false, status: 'todo', last_completed_at: null })
+        .in('id', dueForReset);
+
+      if (error) {
+        reportError('tasks.recurrenceReset', error, { count: dueForReset.length });
+        setTasks(fetched);
+      } else {
+        setTasks(
+          fetched.map((t) =>
+            dueForReset.includes(t.id)
+              ? { ...t, is_completed: false, status: 'todo' as const, last_completed_at: null }
+              : t
+          )
+        );
+        setAnnouncement(
+          dueForReset.length === 1
+            ? '1 tarefa recorrente voltou para a fazer.'
+            : `${dueForReset.length} tarefas recorrentes voltaram para a fazer.`
+        );
+      }
+    } else {
+      setTasks(fetched);
     }
 
     setLoading(false);
-  }, [id, checkAndResetRecurrentTasks]);
+  }, [id]);
 
   useEffect(() => {
-    fetchProjectData();
-  }, [fetchProjectData]);
+    load();
+  }, [load]);
 
-  const handleAddMainTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTaskTitle.trim()) {
-      setTaskError('Informe o título da meta ou tarefa.');
+  /* ---------------- operações ---------------- */
+
+  const createTask = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const title = draft.trim();
+    if (!title) {
+      draftRef.current?.focus();
       return;
     }
-    if (!id) return;
+    if (!id || creating) return;
 
-    setTaskError(null);
-    const { error } = await supabase.from('tasks').insert({
-      project_id: id,
-      title: newTaskTitle.trim(),
-      is_completed: false,
-      status: 'todo',
-      parent_id: null,
-      priority: newTaskPriority,
-      recurrence: newTaskRecurrence,
-    });
+    setCreating(true);
+    // Inserir e já receber a linha de volta evita recarregar o projeto inteiro
+    // a cada tarefa criada — antes a tela piscava em esqueleto toda vez.
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert({
+        project_id: id,
+        title: title.slice(0, 160),
+        is_completed: false,
+        status: 'todo',
+        parent_id: null,
+        priority: draftPriority,
+        recurrence: draftRecurrence,
+      })
+      .select()
+      .single();
+    setCreating(false);
 
-    if (!error) {
-      showToast('Meta criada com sucesso!', 'success');
-      setNewTaskTitle('');
-      setNewTaskPriority('medium');
-      setNewTaskRecurrence('none');
-      fetchProjectData();
-    } else {
-      showToast('Erro ao criar meta.', 'error');
+    if (error || !data) {
+      reportError('task.insert', error, { projectId: id });
+      showToast(userMessage('Não foi possível criar a tarefa.', error), 'error');
+      return;
     }
+
+    setTasks((prev) => [...prev, data as Task]);
+    setDraft('');
+    setDraftPriority('medium');
+    setDraftRecurrence('none');
+    setAnnouncement(`Tarefa “${title}” criada.`);
   };
 
-  const handleAddSubtask = async (parentId: string, e: React.FormEvent) => {
-    e.preventDefault();
-    const title = subtaskTitleMap[parentId]?.trim();
-    if (!title) return;
-    if (!id) return;
+  const addSubtask = async (parentId: string, title: string): Promise<boolean> => {
+    if (!id) return false;
 
-    const { error } = await supabase.from('tasks').insert({
-      project_id: id,
-      title,
-      is_completed: false,
-      status: 'todo',
-      parent_id: parentId,
-      priority: 'medium',
-      recurrence: 'none',
-    });
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert({
+        project_id: id,
+        title: title.slice(0, 160),
+        is_completed: false,
+        status: 'todo',
+        parent_id: parentId,
+        priority: 'medium',
+        recurrence: 'none',
+      })
+      .select()
+      .single();
 
-    if (!error) {
-      showToast('Subtarefa adicionada com sucesso!', 'success');
-      setSubtaskTitleMap((prev) => ({ ...prev, [parentId]: '' }));
-      fetchProjectData();
-    } else {
-      showToast('Erro ao adicionar subtarefa.', 'error');
+    if (error || !data) {
+      reportError('subtask.insert', error, { projectId: id, parentId });
+      showToast(userMessage('Não foi possível adicionar a etapa.', error), 'error');
+      return false;
     }
+
+    setTasks((prev) => [...prev, data as Task]);
+    setAnnouncement(`Etapa “${title}” adicionada.`);
+    return true;
   };
 
-  const handleStatusChange = async (task: Task, newStatus: 'todo' | 'in_progress' | 'done') => {
-    const isDone = newStatus === 'done';
-    const nowIso = isDone ? new Date().toISOString() : null;
+  /**
+   * Uma única função para marcar/desmarcar e para mover de coluna: as duas
+   * ações escrevem exatamente os mesmos três campos. Antes eram dois blocos
+   * quase idênticos, e só um deles desfazia a alteração quando dava erro.
+   *
+   * Nada de aviso na tela quando dá certo — quem marca dez etapas seguidas não
+   * quer dez avisos. O sucesso já está visível na própria caixa marcada; o
+   * anúncio vai para a região `aria-live`, para quem usa leitor de tela.
+   */
+  const applyStatus = async (task: Task, status: BoardStatus) => {
+    const isDone = status === 'done';
+    const completedAt = isDone ? new Date().toISOString() : null;
+    const snapshot = tasks;
 
     setTasks((prev) =>
       prev.map((t) =>
-        t.id === task.id ? { ...t, status: newStatus, is_completed: isDone, last_completed_at: nowIso } : t
+        t.id === task.id ? { ...t, status, is_completed: isDone, last_completed_at: completedAt } : t
       )
     );
+    setAnnouncement(`${task.title}: ${isDone ? 'concluída' : status === 'in_progress' ? 'em andamento' : 'a fazer'}.`);
 
     const { error } = await supabase
       .from('tasks')
-      .update({
-        status: newStatus,
-        is_completed: isDone,
-        last_completed_at: nowIso,
-      })
+      .update({ status, is_completed: isDone, last_completed_at: completedAt })
       .eq('id', task.id);
 
-    if (!error) {
-      showToast('Status atualizado com sucesso!', 'success');
-    } else {
-      showToast('Erro ao atualizar status.', 'error');
-      fetchProjectData();
+    if (error) {
+      reportError('task.status', error, { taskId: task.id });
+      setTasks(snapshot);
+      showToast(userMessage('A alteração não foi salva.', error), 'error');
     }
   };
 
-  const handleToggleTask = async (task: Task) => {
-    const nextStatus = !task.is_completed;
-    const newKanbanStatus = nextStatus ? 'done' : 'todo';
-    const nowIso = nextStatus ? new Date().toISOString() : null;
+  const toggleTask = (task: Task) => applyStatus(task, task.is_completed ? 'todo' : 'done');
 
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === task.id
-          ? { ...t, is_completed: nextStatus, status: newKanbanStatus, last_completed_at: nowIso }
-          : t
-      )
-    );
-
-    const { error } = await supabase
-      .from('tasks')
-      .update({
-        is_completed: nextStatus,
-        status: newKanbanStatus,
-        last_completed_at: nowIso,
-      })
-      .eq('id', task.id);
-
-    if (!error) {
-      showToast('Status alterado com sucesso!', 'success');
-    } else {
-      showToast('Erro ao alterar status.', 'error');
-      fetchProjectData();
-    }
-  };
-
-  const confirmDeleteTask = async () => {
+  const deleteTask = async () => {
     if (!taskToDelete) return;
-    const targetId = taskToDelete.id;
+    const target = taskToDelete;
+    const snapshot = tasks;
 
-    setTasks((prev) => prev.filter((t) => t.id !== targetId && t.parent_id !== targetId));
+    setTasks((prev) => prev.filter((t) => t.id !== target.id && t.parent_id !== target.id));
 
-    const { error } = await supabase.from('tasks').delete().eq('id', targetId);
+    const { error } = await supabase.from('tasks').delete().eq('id', target.id);
 
-    if (!error) {
-      showToast('Item excluído com sucesso!', 'success');
+    if (error) {
+      reportError('task.delete', error, { taskId: target.id });
+      setTasks(snapshot);
+      showToast(userMessage('Não foi possível excluir.', error), 'error');
     } else {
-      showToast('Erro ao excluir item.', 'error');
-      fetchProjectData();
+      showToast(target.parent_id ? 'Etapa excluída.' : 'Tarefa excluída.', 'info');
     }
     setTaskToDelete(null);
   };
 
-  const toggleKanbanSubtaskExpand = (taskId: string) => {
-    setExpandedKanbanTasks((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
-  };
+  /* ---------------- derivados ---------------- */
 
-  const filteredMainTasks = useMemo(() => {
-    return tasks.filter((task) => {
-      if (task.parent_id) return false;
+  const subtasksOf = useCallback((parentId: string) => tasks.filter((t) => t.parent_id === parentId), [tasks]);
 
-      const subtasks = tasks.filter((s) => s.parent_id === task.id);
-      const matchesSearch =
-        task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        subtasks.some((s) => s.title.toLowerCase().includes(searchTerm.toLowerCase()));
+  const mainTasks = useMemo(() => tasks.filter((t) => !t.parent_id), [tasks]);
 
-      if (!matchesSearch) return false;
-
+  const visibleTasks = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return mainTasks.filter((task) => {
       if (statusFilter === 'pending' && task.is_completed) return false;
-      if (statusFilter === 'completed' && !task.is_completed) return false;
-
-      if (priorityFilter !== 'all' && (task.priority || 'medium') !== priorityFilter) return false;
-
-      return true;
+      if (statusFilter === 'done' && !task.is_completed) return false;
+      if (priorityFilter !== 'all' && (task.priority ?? 'medium') !== priorityFilter) return false;
+      if (!term) return true;
+      return (
+        task.title.toLowerCase().includes(term) ||
+        tasks.some((s) => s.parent_id === task.id && s.title.toLowerCase().includes(term))
+      );
     });
-  }, [tasks, searchTerm, statusFilter, priorityFilter]);
+  }, [mainTasks, tasks, search, statusFilter, priorityFilter]);
 
-  const completedCount = tasks.filter((t) => t.is_completed).length;
-  const progressPercentage = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+  const progress = computeProgress(tasks);
+  const filtersActive = Boolean(search.trim()) || statusFilter !== 'all' || priorityFilter !== 'all';
 
-  if (loading) {
+  /* ---------------- telas de exceção ---------------- */
+
+  if (loading) return <DetailSkeleton />;
+
+  if (notFound) {
     return (
-      <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
-        <div className="max-w-3xl mx-auto space-y-6">
-          <Skeleton className="h-4 w-28" />
-          <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-xs space-y-4">
-            <Skeleton className="h-7 w-1/2" />
-          </div>
-          <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-xs space-y-3">
-            <TaskSkeleton />
-            <TaskSkeleton />
-          </div>
-        </div>
-      </div>
+      <ExceptionScreen
+        eyebrow="Projeto"
+        title="Este projeto não existe mais"
+        body="Ele pode ter sido excluído, ou o endereço veio incompleto. O painel mostra tudo o que está na sua conta."
+      />
     );
   }
 
-  if (!project) {
+  if (loadError || !project) {
     return (
-      <div className="min-h-screen bg-slate-50 p-6 text-center text-slate-600">
-        <p className="text-sm">Projeto não encontrado.</p>
-        <Link to="/dashboard" className="text-xs text-slate-900 underline mt-2 inline-block">
-          Voltar ao Dashboard
-        </Link>
-      </div>
+      <ExceptionScreen
+        eyebrow="Erro"
+        title={loadError ?? 'Não conseguimos abrir este projeto.'}
+        body="A conexão pode ter falhado no meio do caminho. Seus dados seguem salvos."
+        onRetry={load}
+      />
     );
   }
+
+  const deadline = getDeadlineInfo(project.deadline);
+  const deadlineLong = formatDeadlineLong(project.deadline);
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-slate-800">
-      <div className="max-w-4xl mx-auto space-y-5">
-        <Link to="/dashboard" className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors inline-block py-1">
-          ← Voltar ao Dashboard
-        </Link>
+    <div className="min-h-dvh flex flex-col">
+      <AppHeader />
 
-        {/* Card do Projeto */}
-        <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs">
-          <div className="flex justify-between items-start gap-4">
-            <div className="space-y-1 min-w-0">
+      <main className="shell flex-1 py-6 sm:py-8 space-y-4">
+        <nav aria-label="Você está em" className="text-sm">
+          <Link to="/dashboard" className="text-fg-soft hover:text-fg">
+            Painel
+          </Link>
+          <span className="text-fg-soft mx-2" aria-hidden="true">
+            /
+          </span>
+          <span className="text-fg-muted">{project.title}</span>
+        </nav>
+
+        {/* -------- cabeçalho do projeto -------- */}
+        <section className="panel p-5 sm:p-6">
+          <div className="flex items-start gap-4 sm:gap-5">
+            <ProgressDial
+              value={progress.percent}
+              size={56}
+              label={`Progresso de ${project.title}`}
+              tone={progress.done === 0 ? 'signal' : 'flow'}
+            />
+
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{project.title}</h1>
-                <span className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-                  {project.category || 'Geral'}
-                </span>
+                <h1 className="text-xl sm:text-2xl">{project.title}</h1>
+                <span className="chip chip-static text-2xs">{project.category || 'Geral'}</span>
               </div>
-              {project.description && (
-                <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">{project.description}</p>
-              )}
+
+              {project.description && <p className="text-sm text-fg-muted mt-2.5 max-w-prose">{project.description}</p>}
+
+              <p className="text-xs font-mono text-fg-soft mt-3">
+                {progress.done}/{progress.total} {progress.total === 1 ? 'tarefa' : 'tarefas'}
+                {deadlineLong && (
+                  <>
+                    {' · '}
+                    <span
+                      style={
+                        deadline.tone === 'alert'
+                          ? { color: 'var(--c-alert)' }
+                          : deadline.tone === 'signal'
+                            ? { color: 'var(--c-signal)' }
+                            : undefined
+                      }
+                    >
+                      {deadline.label}
+                    </span>{' '}
+                    <span className="text-fg-soft">({deadlineLong})</span>
+                  </>
+                )}
+              </p>
             </div>
+
+            {/* No desktop a ação fica na mesma linha; no celular ela vira um
+                botão de largura inteira embaixo, em vez de espremer o título. */}
             <button
-              onClick={() => setIsEditProjectOpen(true)}
-              className="text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-3 py-1.5 rounded-md transition-colors cursor-pointer shrink-0"
+              type="button"
+              onClick={() => setProjectFormOpen(true)}
+              className="btn btn-secondary shrink-0 self-start hidden sm:inline-flex"
             >
-              Editar Projeto
+              Editar projeto
             </button>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-slate-100">
-            <div className="flex justify-between text-xs text-slate-600 mb-1.5 font-medium">
-              <span>Progresso Geral</span>
-              <span>{progressPercentage}%</span>
-            </div>
-            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setProjectFormOpen(true)}
+            className="btn btn-secondary w-full mt-5 sm:hidden"
+          >
+            Editar projeto
+          </button>
+        </section>
+
+        {/* -------- tarefas -------- */}
+        <section className="panel overflow-hidden">
+          <div className="px-4 sm:px-5 pt-5 pb-4">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-lg">Tarefas</h2>
+
               <div
-                className="bg-slate-900 h-full transition-all duration-300 ease-out"
-                style={{ width: `${progressPercentage}%` }}
-              />
+                role="group"
+                aria-label="Modo de visualização"
+                className="flex p-0.5 rounded-md border border-edge"
+                style={{ background: 'var(--c-raised)' }}
+              >
+                <ViewButton active={view === 'list'} onClick={() => setView('list')} label="Lista">
+                  <IconList size={15} />
+                </ViewButton>
+                <ViewButton active={view === 'board'} onClick={() => setView('board')} label="Quadro">
+                  <IconBoard size={15} />
+                </ViewButton>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Seção Principal */}
-        <div className="bg-white p-5 sm:p-6 rounded-lg border border-slate-200 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <h2 className="text-sm font-semibold text-slate-800">Tarefas & Metas</h2>
+            {/* Composição de tarefa. As opções só aparecem depois que existe um
+                título — no celular isso deixa a caixa com uma linha só. */}
+            <form onSubmit={createTask}>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={draft}
+                  maxLength={160}
+                  autoComplete="off"
+                  enterKeyHint="done"
+                  placeholder="O que precisa ser feito?"
+                  aria-label="Título da nova tarefa"
+                  ref={draftRef}
+                  onChange={(e) => setDraft(e.target.value)}
+                  className="field flex-1"
+                />
+                {/* O botão continua sólido com o campo vazio: um CTA principal
+                    permanentemente apagado parece defeito. Enviar sem título
+                    devolve o foco ao campo, que é a correção que falta fazer. */}
+                <button
+                  type="submit"
+                  disabled={creating}
+                  data-busy={creating || undefined}
+                  className="btn btn-primary"
+                >
+                  <IconPlus size={15} />
+                  <span className="hidden sm:inline">Adicionar</span>
+                </button>
+              </div>
 
-            {/* Alternador de Modo de Visualização */}
-            <div className="flex bg-slate-100 p-0.5 rounded-md border border-slate-200 self-stretch sm:self-auto">
-              <button
-                onClick={() => setViewMode('list')}
-                className={`flex-1 sm:flex-none px-3 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer ${
-                  viewMode === 'list'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Lista
-              </button>
-              <button
-                onClick={() => setViewMode('kanban')}
-                className={`flex-1 sm:flex-none px-3 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer ${
-                  viewMode === 'kanban'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Quadro Kanban
-              </button>
-            </div>
-          </div>
-
-          {/* Form de Criação */}
-          <div>
-            <form onSubmit={handleAddMainTask} className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                placeholder="Adicionar nova meta..."
-                value={newTaskTitle}
-                onChange={(e) => {
-                  setNewTaskTitle(e.target.value);
-                  if (taskError) setTaskError(null);
-                }}
-                className={`flex-1 px-3.5 py-2.5 text-sm border rounded-md focus:outline-none transition-colors ${
-                  taskError ? 'border-red-400 focus:border-red-600' : 'border-slate-300 focus:border-slate-800'
-                }`}
-              />
-
-              <select
-                value={newTaskPriority}
-                onChange={(e) => setNewTaskPriority(e.target.value as 'low' | 'medium' | 'high')}
-                className="px-3 py-2.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
-              >
-                <option value="low">Baixa Pri.</option>
-                <option value="medium">Média Pri.</option>
-                <option value="high">Alta Pri.</option>
-              </select>
-
-              <select
-                value={newTaskRecurrence}
-                onChange={(e) => setNewTaskRecurrence(e.target.value)}
-                className="px-3 py-2.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
-              >
-                <option value="none">Única</option>
-                <option value="15m">A cada 15 min</option>
-                <option value="30m">A cada 30 min</option>
-                <option value="1h">A cada 1 hora</option>
-                <option value="6h">A cada 6 horas</option>
-                <option value="12h">A cada 12 horas</option>
-                <option value="daily">Diária</option>
-                <option value="weekly">Semanal</option>
-              </select>
-
-              <button
-                type="submit"
-                className="px-4 py-2.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer active:scale-98 whitespace-nowrap"
-              >
-                Criar Meta
-              </button>
-            </form>
-            {taskError && <p className="text-[11px] text-red-600 mt-1.5 font-medium">{taskError}</p>}
-          </div>
-
-          {/* Barra de Filtros e Busca */}
-          <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row gap-2 justify-between items-stretch sm:items-center">
-            <input
-              type="text"
-              placeholder="Buscar meta ou etapa..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:border-slate-800"
-            />
-
-            <div className="flex gap-2">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'pending' | 'completed')}
-                className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-700 focus:outline-none focus:border-slate-800"
-              >
-                <option value="all">Status: Todos</option>
-                <option value="pending">Pendentes</option>
-                <option value="completed">Concluídas</option>
-              </select>
-
-              <select
-                value={priorityFilter}
-                onChange={(e) => setPriorityFilter(e.target.value as 'all' | 'high' | 'medium' | 'low')}
-                className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-700 focus:outline-none focus:border-slate-800"
-              >
-                <option value="all">Prioridade: Todas</option>
-                <option value="high">Alta</option>
-                <option value="medium">Média</option>
-                <option value="low">Baixa</option>
-              </select>
-            </div>
-          </div>
-
-          {/* MODO LISTA */}
-          {viewMode === 'list' ? (
-            <div className="space-y-3 pt-1">
-              {filteredMainTasks.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-6">
-                  Nenhum resultado encontrado para os filtros selecionados.
-                </p>
-              ) : (
-                filteredMainTasks.map((mainTask) => {
-                  const subtasks = tasks.filter((t) => t.parent_id === mainTask.id);
-                  const subtasksCompleted = subtasks.filter((s) => s.is_completed).length;
-                  const priorityInfo = PRIORITY_STYLES[mainTask.priority || 'medium'] || PRIORITY_STYLES.medium;
-
-                  return (
-                    <div key={mainTask.id} className="border border-slate-200 rounded-lg p-3.5 space-y-3 bg-white">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <input
-                            type="checkbox"
-                            checked={mainTask.is_completed}
-                            onChange={() => handleToggleTask(mainTask)}
-                            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span
-                                className={`text-sm font-semibold truncate ${
-                                  mainTask.is_completed ? 'line-through text-slate-400' : 'text-slate-800'
-                                }`}
-                              >
-                                {mainTask.title}
-                              </span>
-
-                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${priorityInfo.style} whitespace-nowrap`}>
-                                {priorityInfo.label}
-                              </span>
-
-                              {mainTask.recurrence && mainTask.recurrence !== 'none' && (
-                                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 whitespace-nowrap">
-                                  {RECURRENCE_LABELS[mainTask.recurrence] || mainTask.recurrence}
-                                </span>
-                              )}
-                            </div>
-
-                            {subtasks.length > 0 && (
-                              <span className="text-[11px] text-slate-500 block mt-0.5">
-                                Etapas: {subtasksCompleted}/{subtasks.length} concluídas
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setActiveSubtaskInput(activeSubtaskInput === mainTask.id ? null : mainTask.id)
-                            }
-                            className="text-[11px] font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
-                          >
-                            + Subtarefa
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setTaskToEdit(mainTask)}
-                            className="text-slate-400 hover:text-slate-800 p-1 cursor-pointer shrink-0"
-                            title="Editar meta"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                            </svg>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setTaskToDelete({ id: mainTask.id, title: mainTask.title })}
-                            className="text-slate-400 hover:text-red-600 p-1 cursor-pointer shrink-0"
-                            title="Excluir meta"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
-                        </div>
-                      </div>
-
-                      {activeSubtaskInput === mainTask.id && (
-                        <form onSubmit={(e) => handleAddSubtask(mainTask.id, e)} className="flex gap-2 pl-7 pt-1">
-                          <input
-                            type="text"
-                            placeholder="Adicionar subtarefa..."
-                            value={subtaskTitleMap[mainTask.id] || ''}
-                            onChange={(e) =>
-                              setSubtaskTitleMap((prev) => ({ ...prev, [mainTask.id]: e.target.value }))
-                            }
-                            className="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800"
-                          />
-                          <button
-                            type="submit"
-                            className="px-3 py-1.5 text-xs font-medium bg-slate-800 text-white rounded-md hover:bg-slate-700 cursor-pointer"
-                          >
-                            Salvar
-                          </button>
-                        </form>
-                      )}
-
-                      {subtasks.length > 0 && (
-                        <div className="pl-7 space-y-1.5 border-l-2 border-slate-100 ml-2 pt-1">
-                          {subtasks.map((subtask) => (
-                            <div
-                              key={subtask.id}
-                              className="flex items-center justify-between p-2 rounded-md hover:bg-slate-50 transition-colors"
-                            >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <input
-                                  type="checkbox"
-                                  checked={subtask.is_completed}
-                                  onChange={() => handleToggleTask(subtask)}
-                                  className="h-3.5 w-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer"
-                                />
-                                <span className={`text-xs ${subtask.is_completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>
-                                  {subtask.title}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => setTaskToEdit(subtask)}
-                                  className="text-slate-300 hover:text-slate-700 p-1 cursor-pointer"
-                                  title="Editar subtarefa"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                  </svg>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setTaskToDelete({ id: subtask.id, title: subtask.title })}
-                                  className="text-slate-300 hover:text-red-600 p-1 cursor-pointer"
-                                  title="Excluir subtarefa"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          ) : (
-            /* MODO QUADRO KANBAN */
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 overflow-x-auto">
-              {[
-                { id: 'todo', label: 'A Fazer', color: 'bg-slate-100 text-slate-700' },
-                { id: 'in_progress', label: 'Em Andamento', color: 'bg-amber-100 text-amber-800' },
-                { id: 'done', label: 'Concluído', color: 'bg-emerald-100 text-emerald-800' },
-              ].map((column) => {
-                const columnTasks = filteredMainTasks.filter((t) => (t.status || (t.is_completed ? 'done' : 'todo')) === column.id);
-
-                return (
-                  <div key={column.id} className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-3 min-w-[250px]">
-                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${column.color}`}>
-                        {column.label}
-                      </span>
-                      <span className="text-xs font-medium text-slate-500">{columnTasks.length}</span>
-                    </div>
-
-                    <div className="space-y-2.5">
-                      {columnTasks.length === 0 ? (
-                        <p className="text-[11px] text-slate-400 text-center py-4">Nenhuma meta nesta coluna.</p>
-                      ) : (
-                        columnTasks.map((task) => {
-                          const subtasks = tasks.filter((s) => s.parent_id === task.id);
-                          const subtasksCompleted = subtasks.filter((s) => s.is_completed).length;
-                          const priorityInfo = PRIORITY_STYLES[task.priority || 'medium'] || PRIORITY_STYLES.medium;
-                          const isExpanded = !!expandedKanbanTasks[task.id];
-
-                          return (
-                            <div key={task.id} className="bg-white p-3.5 rounded-md border border-slate-200 shadow-xs space-y-2.5">
-                              <div className="flex justify-between items-start gap-2">
-                                <span className={`text-xs font-semibold leading-snug ${task.is_completed ? 'line-through text-slate-400' : 'text-slate-800'}`}>
-                                  {task.title}
-                                </span>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    onClick={() => setTaskToEdit(task)}
-                                    className="text-slate-300 hover:text-slate-700 p-0.5 cursor-pointer"
-                                    title="Editar"
-                                  >
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setTaskToDelete({ id: task.id, title: task.title })}
-                                    className="text-slate-300 hover:text-red-600 p-0.5 cursor-pointer"
-                                    title="Excluir"
-                                  >
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${priorityInfo.style}`}>
-                                  {priorityInfo.label}
-                                </span>
-                                {task.recurrence && task.recurrence !== 'none' && (
-                                  <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                                    {RECURRENCE_LABELS[task.recurrence] || task.recurrence}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Barra e Controle de Subtarefas no Kanban */}
-                              <div className="pt-1.5 border-t border-slate-100">
-                                <div className="flex justify-between items-center text-[11px] text-slate-500 mb-1">
-                                  <span className="font-medium">
-                                    Subtarefas: {subtasksCompleted}/{subtasks.length}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleKanbanSubtaskExpand(task.id)}
-                                    className="text-[10px] text-slate-700 hover:underline cursor-pointer"
-                                  >
-                                    {isExpanded ? 'Ocultar ▲' : 'Ver etapas ▼'}
-                                  </button>
-                                </div>
-
-                                {subtasks.length > 0 && (
-                                  <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden mb-2">
-                                    <div
-                                      className="bg-slate-800 h-full transition-all duration-300"
-                                      style={{ width: `${Math.round((subtasksCompleted / subtasks.length) * 100)}%` }}
-                                    />
-                                  </div>
-                                )}
-
-                                {isExpanded && (
-                                  <div className="mt-2 space-y-1.5 bg-slate-50 p-2 rounded-md border border-slate-100">
-                                    {subtasks.length === 0 ? (
-                                      <p className="text-[10px] text-slate-400">Nenhuma subtarefa.</p>
-                                    ) : (
-                                      subtasks.map((sub) => (
-                                        <div key={sub.id} className="flex items-center justify-between gap-1.5">
-                                          <div className="flex items-center gap-1.5 min-w-0">
-                                            <input
-                                              type="checkbox"
-                                              checked={sub.is_completed}
-                                              onChange={() => handleToggleTask(sub)}
-                                              className="h-3 w-3 rounded border-slate-300 text-slate-900 focus:ring-slate-800 cursor-pointer"
-                                            />
-                                            <span className={`text-[11px] truncate ${sub.is_completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>
-                                              {sub.title}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      ))
-                                    )}
-
-                                    <form
-                                      onSubmit={(e) => handleAddSubtask(task.id, e)}
-                                      className="flex gap-1 pt-1 mt-1 border-t border-slate-200/60"
-                                    >
-                                      <input
-                                        type="text"
-                                        placeholder="+ Etapa"
-                                        value={subtaskTitleMap[task.id] || ''}
-                                        onChange={(e) =>
-                                          setSubtaskTitleMap((prev) => ({ ...prev, [task.id]: e.target.value }))
-                                        }
-                                        className="flex-1 px-2 py-1 text-[10px] border border-slate-200 rounded bg-white focus:outline-none focus:border-slate-800"
-                                      />
-                                      <button
-                                        type="submit"
-                                        className="px-2 py-1 text-[10px] font-medium bg-slate-800 text-white rounded hover:bg-slate-700 cursor-pointer"
-                                      >
-                                        Add
-                                      </button>
-                                    </form>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Mover Card de Coluna */}
-                              <div className="pt-2 border-t border-slate-100 flex justify-between items-center">
-                                <span className="text-[10px] text-slate-400 font-medium">Coluna:</span>
-                                <select
-                                  value={task.status || (task.is_completed ? 'done' : 'todo')}
-                                  onChange={(e) => handleStatusChange(task, e.target.value as 'todo' | 'in_progress' | 'done')}
-                                  className="text-[10px] border border-slate-200 rounded px-1.5 py-0.5 bg-white text-slate-700 focus:outline-none"
-                                >
-                                  <option value="todo">A Fazer</option>
-                                  <option value="in_progress">Em Andamento</option>
-                                  <option value="done">Concluído</option>
-                                </select>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
+              {draft.trim() && (
+                <div className="grid grid-cols-2 gap-2 mt-2 animate-rise">
+                  <div>
+                    <label className="sr-only" htmlFor="new-priority">
+                      Prioridade da nova tarefa
+                    </label>
+                    <select
+                      id="new-priority"
+                      value={draftPriority}
+                      onChange={(e) => setDraftPriority(e.target.value as 'low' | 'medium' | 'high')}
+                      className="field py-2 text-xs"
+                    >
+                      <option value="low">Prioridade baixa</option>
+                      <option value="medium">Prioridade média</option>
+                      <option value="high">Prioridade alta</option>
+                    </select>
                   </div>
-                );
-              })}
+                  <div>
+                    <label className="sr-only" htmlFor="new-recurrence">
+                      Repetição da nova tarefa
+                    </label>
+                    <select
+                      id="new-recurrence"
+                      value={draftRecurrence}
+                      onChange={(e) => setDraftRecurrence(e.target.value)}
+                      className="field py-2 text-xs"
+                    >
+                      {RECURRENCE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </form>
+          </div>
+
+          {mainTasks.length > 0 && (
+            <div className="px-4 sm:px-5 py-3 border-y border-edge flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-soft pointer-events-none">
+                  <IconSearch size={15} />
+                </span>
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar tarefa ou etapa"
+                  aria-label="Buscar tarefa ou etapa"
+                  className="field pl-9 py-2"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:flex gap-2">
+                <label className="sr-only" htmlFor="filter-status">
+                  Filtrar por situação
+                </label>
+                <select
+                  id="filter-status"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                  className="field py-2 text-xs sm:w-40"
+                >
+                  <option value="all">Todas as situações</option>
+                  <option value="pending">Em aberto</option>
+                  <option value="done">Concluídas</option>
+                </select>
+
+                <label className="sr-only" htmlFor="filter-priority">
+                  Filtrar por prioridade
+                </label>
+                <select
+                  id="filter-priority"
+                  value={priorityFilter}
+                  onChange={(e) => setPriorityFilter(e.target.value as PriorityFilter)}
+                  className="field py-2 text-xs sm:w-40"
+                >
+                  <option value="all">Todas as prioridades</option>
+                  <option value="high">Alta</option>
+                  <option value="medium">Média</option>
+                  <option value="low">Baixa</option>
+                </select>
+              </div>
             </div>
           )}
-        </div>
-      </div>
 
-      <EditProjectModal
-        isOpen={isEditProjectOpen}
-        project={project}
-        onClose={() => setIsEditProjectOpen(false)}
-        onProjectUpdated={fetchProjectData}
-      />
+          {mainTasks.length === 0 ? (
+            <div className="px-6 py-14 text-center">
+              <p className="text-fg">Nenhuma tarefa ainda.</p>
+              <p className="text-sm text-fg-muted mt-2 max-w-prose mx-auto">
+                Escreva o primeiro passo no campo acima. Depois dá para quebrar cada tarefa em etapas menores.
+              </p>
+            </div>
+          ) : visibleTasks.length === 0 ? (
+            <div className="px-6 py-14 text-center">
+              <p className="text-fg">Nada corresponde a esses filtros.</p>
+              {filtersActive && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch('');
+                    setStatusFilter('all');
+                    setPriorityFilter('all');
+                  }}
+                  className="btn btn-secondary mt-5"
+                >
+                  Limpar filtros
+                </button>
+              )}
+            </div>
+          ) : view === 'list' ? (
+            <TaskList
+              tasks={visibleTasks}
+              subtasksOf={subtasksOf}
+              onToggle={toggleTask}
+              onEdit={setTaskToEdit}
+              onDelete={setTaskToDelete}
+              onAddSubtask={addSubtask}
+            />
+          ) : (
+            <TaskBoard
+              tasks={visibleTasks}
+              subtasksOf={subtasksOf}
+              onMove={(task, status) => statusOf(task) !== status && applyStatus(task, status)}
+              onToggle={toggleTask}
+              onEdit={setTaskToEdit}
+              onDelete={setTaskToDelete}
+            />
+          )}
+        </section>
 
-      {taskToEdit && (
-        <EditTaskModal
-          isOpen={!!taskToEdit}
-          task={taskToEdit}
-          onClose={() => setTaskToEdit(null)}
-          onTaskUpdated={fetchProjectData}
+        {/* Região de anúncios: o que muda em silêncio na tela é dito aqui. */}
+        <p aria-live="polite" className="sr-only">
+          {announcement}
+        </p>
+      </main>
+
+      {user && (
+        <ProjectFormModal
+          open={projectFormOpen}
+          project={project}
+          userId={user.id}
+          onClose={() => setProjectFormOpen(false)}
+          onSaved={load}
         />
       )}
 
+      <EditTaskModal
+        open={Boolean(taskToEdit)}
+        task={taskToEdit}
+        onClose={() => setTaskToEdit(null)}
+        onSaved={load}
+      />
+
       <ConfirmModal
-        isOpen={!!taskToDelete}
-        title="Excluir Item"
-        message={`Deseja realmente remover "${taskToDelete?.title}"?`}
+        open={Boolean(taskToDelete)}
+        title={taskToDelete?.parent_id ? 'Excluir etapa' : 'Excluir tarefa'}
+        message={
+          taskToDelete?.parent_id
+            ? `“${taskToDelete?.title}” será removida desta tarefa.`
+            : `“${taskToDelete?.title}” e todas as suas etapas serão removidas. Não dá para desfazer.`
+        }
         confirmText="Excluir"
-        isDestructive={true}
-        onConfirm={confirmDeleteTask}
+        onConfirm={deleteTask}
         onClose={() => setTaskToDelete(null)}
       />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+function ViewButton({
+  active,
+  onClick,
+  label,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs font-medium transition-colors focus-inset"
+      style={active ? { background: 'var(--c-panel)', color: 'var(--c-fg)' } : { color: 'var(--c-fg-soft)' }}
+    >
+      {children}
+      {label}
+    </button>
+  );
+}
+
+function DetailSkeleton() {
+  return (
+    <div className="min-h-dvh">
+      <AppHeader />
+      <div className="shell py-6 sm:py-8 space-y-4" aria-busy="true">
+        <Skeleton className="h-4 w-40" />
+        <div className="panel p-5 sm:p-6 flex gap-5">
+          <Skeleton className="h-16 w-16 rounded-full" />
+          <div className="flex-1 space-y-3">
+            <Skeleton className="h-6 w-1/2" />
+            <Skeleton className="h-3.5 w-3/4" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </div>
+        <div className="panel overflow-hidden">
+          <div className="p-5">
+            <Skeleton className="h-9 w-full" />
+          </div>
+          <div className="divide-y divide-edge border-t border-edge">
+            <TaskSkeleton />
+            <TaskSkeleton />
+            <TaskSkeleton />
+          </div>
+        </div>
+        <span className="sr-only" role="status">
+          Carregando o projeto…
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ExceptionScreen({
+  eyebrow,
+  title,
+  body,
+  onRetry,
+}: {
+  eyebrow: string;
+  title: string;
+  body: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="min-h-dvh flex flex-col">
+      <AppHeader />
+      <main className="shell flex-1 grid place-items-center py-16">
+        <div className="panel p-8 sm:p-10 max-w-narrow w-full">
+          <p className="eyebrow">{eyebrow}</p>
+          <h1 className="text-2xl mt-3">{title}</h1>
+          <p className="text-sm text-fg-muted mt-3 max-w-prose">{body}</p>
+          <div className="flex flex-col sm:flex-row gap-2 mt-7">
+            {onRetry && (
+              <button type="button" onClick={onRetry} className="btn btn-primary btn-lg">
+                Tentar de novo
+              </button>
+            )}
+            <Link to="/dashboard" className="btn btn-secondary btn-lg">
+              Voltar ao painel
+            </Link>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

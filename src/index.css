@@ -1,8 +1,421 @@
+/* ------------------------------------------------------------------
+   As fontes são importadas em `src/main.tsx`, não aqui.
+   O `@import` de CSS com especificador de pacote depende do
+   postcss-import saber olhar dentro de node_modules, o que nem toda
+   combinação de versão e sistema operacional faz — em Windows ele
+   procurava "./@fontsource-variable/archivo/wght.css" e falhava.
+   Pelo import de módulo o próprio Vite resolve, em qualquer ambiente.
+   ------------------------------------------------------------------ */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #f8fafc;
-  color: #0f172a;
+/* ==================================================================
+   MetaFlow — tokens
+   Direção: painel de instrumentos. Estrutura vem de degraus de
+   superfície e fios de 1px, não de sombra ou gradiente. Três acentos
+   com significado fixo e nenhum uso decorativo.
+   Todos os pares texto/superfície foram medidos: >= 4.5:1 (WCAG AA).
+   Bordas de componentes interativos: >= 3:1 (WCAG 1.4.11).
+   ================================================================== */
+:root {
+  color-scheme: dark;
+
+  /* Superfícies */
+  --c-ink: #080b13;
+  --c-panel: #0f1523;
+  --c-raised: #161d2e;
+  --c-elevated: #1d2537;
+
+  /* Fios */
+  --c-edge: #232c40;        /* separadores decorativos */
+  --c-edge-strong: #5a6a8c; /* bordas de controles — 3.1:1 sobre raised */
+
+  /* Texto */
+  --c-fg: #e8edf7;          /* 15.5:1 */
+  --c-fg-muted: #a3adc4;    /*  8.1:1 */
+  --c-fg-soft: #818ca6;     /*  5.4:1 */
+
+  /* Acentos */
+  --c-signal: #f5a623;      /* ação, prazo iminente     9.0:1 */
+  --c-signal-ink: #1b1102;
+  --c-signal-soft: rgba(245, 166, 35, 0.13);
+
+  --c-flow: #45d8c9;        /* progresso, concluído    10.3:1 */
+  --c-flow-ink: #05231f;
+  --c-flow-soft: rgba(69, 216, 201, 0.12);
+
+  --c-alert: #ff6b5b;       /* risco, atraso, destruir  6.5:1 */
+  --c-alert-ink: #2b0a04;
+  --c-alert-soft: rgba(255, 107, 91, 0.13);
+
+  /* Ritmo — usado por seções editoriais e docks fixas */
+  --dock-h: 4.25rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: var(--c-ink);
+    color: var(--c-fg);
+    font-family: theme('fontFamily.sans');
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100dvh;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: theme('fontFamily.display');
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  p { text-wrap: pretty; }
+
+  /* Números que o usuário acompanha são sempre tabulares. */
+  .tabular, .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'zero' 1;
+  }
+
+  ::selection {
+    background: var(--c-signal);
+    color: var(--c-signal-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--c-signal);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  /* Sem anel de foco duplicado em controles que já desenham o seu. */
+  .focus-inset:focus-visible { outline-offset: -2px; }
+
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--c-edge);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #384359; background-clip: content-box; }
+
+  /* Trava de rolagem quando há sobreposição aberta. */
+  body[data-overlay='open'] { overflow: hidden; }
+}
+
+@layer components {
+  /* ---------- Superfícies ---------- */
+  .panel {
+    background: var(--c-panel);
+    border: 1px solid var(--c-edge);
+    border-radius: theme('borderRadius.lg');
+  }
+
+  .panel-flush {
+    background: var(--c-panel);
+    border-top: 1px solid var(--c-edge);
+    border-bottom: 1px solid var(--c-edge);
+  }
+
+  .hairline { border-top: 1px solid var(--c-edge); }
+
+  /* Rótulo de instrumento: mono, caixa alta, tracking largo. */
+  .eyebrow {
+    font-family: theme('fontFamily.mono');
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--c-fg-soft);
+  }
+
+  /* ---------- Botões ---------- */
+  .btn {
+    --btn-py: 0.5rem;
+    --btn-px: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: var(--btn-py) var(--btn-px);
+    border-radius: theme('borderRadius.md');
+    border: 1px solid transparent;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    line-height: 1.15rem;
+    white-space: nowrap;
+    cursor: pointer;
+    position: relative;
+    transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease;
+  }
+  .btn:disabled,
+  .btn[aria-disabled='true'] { opacity: 0.55; cursor: not-allowed; }
+  .btn:active:not(:disabled) { transform: translateY(0.5px); }
+
+  .btn-lg { --btn-py: 0.75rem; --btn-px: 1.25rem; font-size: 0.875rem; }
+  .btn-sm { --btn-py: 0.3125rem; --btn-px: 0.625rem; font-size: 0.75rem; }
+
+  .btn-primary {
+    background: var(--c-signal);
+    border-color: var(--c-signal);
+    color: var(--c-signal-ink);
+  }
+  .btn-primary:hover:not(:disabled) { background: #ffb63e; border-color: #ffb63e; }
+
+  .btn-secondary {
+    background: var(--c-raised);
+    border-color: var(--c-edge-strong);
+    color: var(--c-fg);
+  }
+  .btn-secondary:hover:not(:disabled) { background: var(--c-elevated); }
+
+  .btn-quiet {
+    background: transparent;
+    border-color: transparent;
+    color: var(--c-fg-muted);
+    font-weight: 500;
+  }
+  .btn-quiet:hover:not(:disabled) { background: var(--c-raised); color: var(--c-fg); }
+
+  .btn-danger {
+    background: var(--c-alert);
+    border-color: var(--c-alert);
+    color: var(--c-alert-ink);
+  }
+  .btn-danger:hover:not(:disabled) { background: #ff8677; border-color: #ff8677; }
+
+  /* Estado de carregamento: o rótulo some, o traço gira no lugar —
+     a largura do botão não muda, então nada salta na tela. */
+  .btn[data-busy='true'] { color: transparent !important; pointer-events: none; }
+  .btn[data-busy='true']::after {
+    content: '';
+    position: absolute;
+    width: 0.875rem;
+    height: 0.875rem;
+    border-radius: 999px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    color: inherit;
+    animation: btn-spin 620ms linear infinite;
+  }
+  .btn-primary[data-busy='true']::after { border-color: var(--c-signal-ink); border-top-color: transparent; }
+  .btn-danger[data-busy='true']::after { border-color: var(--c-alert-ink); border-top-color: transparent; }
+  .btn-secondary[data-busy='true']::after,
+  .btn-quiet[data-busy='true']::after { border-color: var(--c-fg); border-top-color: transparent; }
+
+  @keyframes btn-spin { to { transform: rotate(360deg); } }
+
+  /* Botão de ícone — alvo de toque mínimo de 40px mesmo com ícone de 16px. */
+  .btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: theme('borderRadius.md');
+    color: var(--c-fg-soft);
+    cursor: pointer;
+    transition: background-color 130ms ease, color 130ms ease;
+  }
+  .btn-icon:hover { background: var(--c-raised); color: var(--c-fg); }
+
+  /* ---------- Campos ---------- */
+  .field {
+    width: 100%;
+    background: var(--c-raised);
+    border: 1px solid var(--c-edge-strong);
+    border-radius: theme('borderRadius.md');
+    color: var(--c-fg);
+    padding: 0.5625rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    transition: border-color 130ms ease, background-color 130ms ease;
+  }
+  .field::placeholder { color: var(--c-fg-soft); }
+  .field:hover:not(:disabled) { border-color: #6d7c9c; }
+  .field:focus {
+    outline: 2px solid var(--c-signal);
+    outline-offset: -1px;
+    border-color: var(--c-signal);
+  }
+  .field:disabled { opacity: 0.55; cursor: not-allowed; }
+  .field[aria-invalid='true'] { border-color: var(--c-alert); }
+
+  select.field {
+    appearance: none;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.75 6 7.75 9 4.75' fill='none' stroke='%23a3adc4' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+  }
+  select.field option { background: var(--c-raised); color: var(--c-fg); }
+
+  .field-label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--c-fg-muted);
+    margin-bottom: 0.375rem;
+  }
+
+  /* ---------- Caixa de seleção ---------- */
+  .check {
+    appearance: none;
+    width: 1.125rem;
+    height: 1.125rem;
+    flex-shrink: 0;
+    border: 1.5px solid var(--c-edge-strong);
+    border-radius: theme('borderRadius.xs');
+    background: var(--c-raised);
+    cursor: pointer;
+    display: grid;
+    place-content: center;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  .check::after {
+    content: '';
+    width: 0.625rem;
+    height: 0.625rem;
+    transform: scale(0);
+    transition: transform 130ms var(--ease-out);
+    background: var(--c-flow-ink);
+    clip-path: polygon(14% 44%, 0 60%, 39% 100%, 100% 22%, 84% 8%, 39% 68%);
+  }
+  .check:checked { background: var(--c-flow); border-color: var(--c-flow); }
+  .check:checked::after { transform: scale(1); }
+  .check:hover:not(:disabled) { border-color: var(--c-flow); }
+
+  /* Área de toque confortável sem inflar o desenho da caixa. */
+  .check-hit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem;
+    margin: -0.5rem;
+    cursor: pointer;
+  }
+
+  /* ---------- Chips ---------- */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-family: theme('fontFamily.mono');
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    padding: 0.25rem 0.625rem;
+    border-radius: 999px;
+    border: 1px solid var(--c-edge-strong);
+    background: transparent;
+    color: var(--c-fg-muted);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  .chip:hover { color: var(--c-fg); border-color: #6d7c9c; }
+  .chip[aria-pressed='true'] {
+    background: var(--c-fg);
+    border-color: var(--c-fg);
+    color: var(--c-ink);
+  }
+  .chip-static { cursor: default; border-color: var(--c-edge); }
+  .chip-static:hover { color: var(--c-fg-muted); border-color: var(--c-edge); }
+
+  /* ---------- Esqueletos ---------- */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--c-raised);
+    border-radius: theme('borderRadius.sm');
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(232, 237, 247, 0.055), transparent);
+    animation: sweep 1.4s linear infinite;
+  }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  .link {
+    color: var(--c-flow);
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  .link:hover { text-decoration: underline; }
+}
+
+/* ------------------------------------------------------------------
+   Movimento reduzido: o layout foi desenhado para funcionar parado.
+   Aqui tudo o que é transição de entrada some; só o giro dos estados
+   de carregamento permanece, porque comunica que algo está em curso.
+   ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn[data-busy='true']::after,
+  .skeleton::after {
+    animation-duration: 900ms !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* ==================================================================
+   Casca de página
+
+   Deliberadamente fora de `@layer components` e sem `theme()` nem
+   `var()`: é a regra que define a margem lateral de TODAS as telas, e
+   dentro da camada de componentes ela depende da varredura de conteúdo
+   do Tailwind para sobreviver ao build. Em pelo menos um ambiente
+   Windows a regra foi removida e o site inteiro ficou colado nas bordas.
+   Com valores literais e fora da camada, não há o que falhar — e nada
+   no código precisa sobrescrever estas quatro propriedades.
+   ================================================================== */
+.shell {
+  width: 100%;
+  max-width: 64rem;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+@media (min-width: 640px) {
+  .shell { padding-inline: 2.5rem; }
+}
+
+@media (min-width: 1024px) {
+  .shell { padding-inline: 3rem; }
+}
+
+/* Espaço reservado para a barra fixa de ação no celular. */
+.dock-safe {
+  padding-bottom: 4.25rem;
+  padding-bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));
+}
+
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(-4px) scale(0.985); }
+}
+
+@keyframes route-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
 }

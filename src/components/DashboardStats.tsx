@@ -1,57 +1,75 @@
 import type { Project, Task } from '../types';
+import ProgressDial from './ProgressDial';
+import { computeProgress } from '../lib/progress';
+import { cn } from '../lib/utils';
 
 interface ProjectWithTasks extends Project {
   tasks: Task[];
 }
 
-interface DashboardStatsProps {
-  projects: ProjectWithTasks[];
-}
-
-export default function DashboardStats({ projects }: DashboardStatsProps) {
-  const allTasks = projects.flatMap((p) => p.tasks || []);
-  const totalTasks = allTasks.length;
-  const completedTasks = allTasks.filter((t) => t.is_completed).length;
-  const pendingTasks = totalTasks - completedTasks;
-  const highPriorityPending = allTasks.filter((t) => !t.is_completed && t.priority === 'high').length;
-
-  const globalProgress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+/**
+ * O agrupamento de leituras do painel.
+ *
+ * É um painel único dividido por fios, não quatro cartões flutuando lado a
+ * lado: as quatro medidas descrevem o mesmo conjunto de tarefas, então
+ * pertencem ao mesmo instrumento. Sem ícones decorativos e sem animação de
+ * entrada — o dado aparece assim que existe.
+ */
+export default function DashboardStats({ projects }: { projects: ProjectWithTasks[] }) {
+  const allTasks = projects.flatMap((p) => p.tasks ?? []);
+  const { total, done, percent } = computeProgress(allTasks);
+  const open = total - done;
+  const urgent = allTasks.filter((t) => !t.is_completed && t.priority === 'high').length;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-      <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
-        <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Progresso Geral</span>
-        <div className="flex items-baseline gap-2 mt-1">
-          <span className="text-2xl font-bold text-slate-900">{globalProgress}%</span>
-          <span className="text-xs text-slate-400">concluído</span>
+    <section aria-label="Resumo das tarefas" className="panel overflow-hidden">
+      <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-edge">
+        <div className="p-4 sm:p-5 flex items-center gap-3.5 col-span-2 lg:col-span-1">
+          <ProgressDial value={percent} size={52} label="Progresso geral" tone={done === 0 ? 'signal' : 'flow'} />
+          <div className="min-w-0">
+            <p className="eyebrow">Progresso geral</p>
+            <p className="text-sm text-fg-muted mt-1">
+              <span className="font-mono text-fg">{done}</span> de{' '}
+              <span className="font-mono">{total}</span> tarefas
+            </p>
+          </div>
         </div>
-      </div>
 
-      <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
-        <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Tarefas Pendentes</span>
-        <div className="flex items-baseline gap-2 mt-1">
-          <span className="text-2xl font-bold text-slate-800">{pendingTasks}</span>
-          <span className="text-xs text-slate-400">de {totalTasks}</span>
-        </div>
+        <Reading label="Em aberto" value={open} note={open === 1 ? 'tarefa' : 'tarefas'} />
+        <Reading label="Concluídas" value={done} note="no total" tone={done > 0 ? 'flow' : undefined} />
+        <Reading
+          label="Prioridade alta"
+          value={urgent}
+          note={urgent === 0 ? 'nada urgente' : urgent === 1 ? 'tarefa em aberto' : 'tarefas em aberto'}
+          tone={urgent > 0 ? 'alert' : undefined}
+          className="col-span-2 lg:col-span-1"
+        />
       </div>
+    </section>
+  );
+}
 
-      <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
-        <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Concluídas</span>
-        <div className="flex items-baseline gap-2 mt-1">
-          <span className="text-2xl font-bold text-emerald-600">{completedTasks}</span>
-          <span className="text-xs text-slate-400">etapas</span>
-        </div>
-      </div>
-
-      <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
-        <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Alta Prioridade</span>
-        <div className="flex items-baseline gap-2 mt-1">
-          <span className={`text-2xl font-bold ${highPriorityPending > 0 ? 'text-red-600' : 'text-slate-800'}`}>
-            {highPriorityPending}
-          </span>
-          <span className="text-xs text-slate-400">urgentes</span>
-        </div>
-      </div>
+function Reading({
+  label,
+  value,
+  note,
+  tone,
+  className = '',
+}: {
+  label: string;
+  value: number;
+  note: string;
+  tone?: 'flow' | 'alert';
+  className?: string;
+}) {
+  const color = tone === 'alert' ? 'text-alert' : tone === 'flow' ? 'text-flow' : 'text-fg';
+  return (
+    <div className={cn('p-4 sm:p-5', className)}>
+      <p className="eyebrow">{label}</p>
+      <p className="mt-1.5 flex items-baseline gap-2">
+        <span className={`font-mono font-medium text-2xl tabular ${color}`}>{value}</span>
+        <span className="text-xs text-fg-soft">{note}</span>
+      </p>
     </div>
   );
 }

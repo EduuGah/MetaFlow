@@ -1,131 +1,159 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Task } from '../types';
 import { useToast } from '../context/ToastContext';
+import { reportError, userMessage } from '../lib/logger';
+import { RECURRENCE_OPTIONS } from '../lib/recurrence';
+import Modal, { ModalActions } from './Modal';
 
 interface EditTaskModalProps {
-  isOpen: boolean;
+  open: boolean;
   task: Task | null;
   onClose: () => void;
-  onTaskUpdated: () => void;
+  onSaved: () => void;
 }
 
-export default function EditTaskModal({
-  isOpen,
-  task,
-  onClose,
-  onTaskUpdated,
-}: EditTaskModalProps) {
+const PRIORITIES = [
+  { value: 'low', label: 'Baixa — pode esperar' },
+  { value: 'medium', label: 'Média — no fluxo normal' },
+  { value: 'high', label: 'Alta — puxa a atenção do painel' },
+] as const;
+
+export default function EditTaskModal({ open, task, onClose, onSaved }: EditTaskModalProps) {
   const { showToast } = useToast();
+  const fieldId = useId();
+  const isSubtask = Boolean(task?.parent_id);
+
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
-  const [recurrence, setRecurrence] = useState<string>('none');
-  const [loading, setLoading] = useState(false);
+  const [recurrence, setRecurrence] = useState('none');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (task) {
-      setTitle(task.title);
-      setPriority(task.priority || 'medium');
-      setRecurrence(task.recurrence || 'none');
+    if (!open || !task) return;
+    setTitle(task.title);
+    setPriority(task.priority ?? 'medium');
+    setRecurrence(task.recurrence ?? 'none');
+    setError(null);
+    setBusy(false);
+  }, [open, task]);
+
+  if (!task) return null;
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      setError('O título não pode ficar vazio.');
+      return;
     }
-  }, [task]);
 
-  if (!isOpen || !task) return null;
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-
-    setLoading(true);
-
-    const { error } = await supabase
+    setBusy(true);
+    const { error: updateError } = await supabase
       .from('tasks')
       .update({
-        title: title.trim(),
+        title: cleanTitle.slice(0, 160),
         priority,
-        recurrence: task.parent_id ? 'none' : recurrence,
+        // Subtarefa não repete: quem controla o ciclo é a tarefa principal.
+        recurrence: isSubtask ? 'none' : recurrence,
       })
       .eq('id', task.id);
+    setBusy(false);
 
-    setLoading(false);
-
-    if (!error) {
-      showToast('Tarefa atualizada com sucesso!', 'success');
-      onTaskUpdated();
-      onClose();
-    } else {
-      showToast('Erro ao atualizar tarefa.', 'error');
+    if (updateError) {
+      reportError('task.update', updateError, { taskId: task.id });
+      showToast(userMessage('Não foi possível salvar a tarefa.', updateError), 'error');
+      return;
     }
+
+    showToast('Tarefa atualizada.', 'success');
+    onSaved();
+    onClose();
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg border border-slate-200 w-full max-w-sm p-5 shadow-md">
-        <h3 className="text-base font-semibold text-slate-800 mb-4">Editar Item</h3>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Título</label>
-            <input
-              type="text"
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:border-slate-800"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Prioridade</label>
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value as 'low' | 'medium' | 'high')}
-              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
-            >
-              <option value="low">Baixa</option>
-              <option value="medium">Média</option>
-              <option value="high">Alta</option>
-            </select>
-          </div>
-
-          {!task.parent_id && (
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Recorrência</label>
-              <select
-                value={recurrence}
-                onChange={(e) => setRecurrence(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-md focus:outline-none focus:border-slate-800 bg-white text-slate-700"
-              >
-                <option value="none">Sem repetição (Única)</option>
-                <option value="15m">A cada 15 minutos</option>
-                <option value="30m">A cada 30 minutos</option>
-                <option value="1h">A cada 1 hora</option>
-                <option value="6h">A cada 6 horas</option>
-                <option value="12h">A cada 12 horas</option>
-                <option value="daily">Diariamente</option>
-                <option value="weekly">Semanalmente</option>
-              </select>
-            </div>
+    <Modal open={open} onClose={onClose} title={isSubtask ? 'Editar subtarefa' : 'Editar tarefa'} size="sm">
+      <form onSubmit={handleSubmit} noValidate className="space-y-5">
+        <div>
+          <label htmlFor={`${fieldId}-title`} className="field-label">
+            Título
+          </label>
+          <input
+            id={`${fieldId}-title`}
+            data-autofocus
+            type="text"
+            value={title}
+            maxLength={160}
+            autoComplete="off"
+            aria-invalid={error ? 'true' : undefined}
+            aria-describedby={error ? `${fieldId}-error` : undefined}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              if (error) setError(null);
+            }}
+            className="field"
+          />
+          {error && (
+            <p id={`${fieldId}-error`} className="text-xs text-alert mt-1.5">
+              {error}
+            </p>
           )}
+        </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+        <div>
+          <label htmlFor={`${fieldId}-priority`} className="field-label">
+            Prioridade
+          </label>
+          <select
+            id={`${fieldId}-priority`}
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as 'low' | 'medium' | 'high')}
+            className="field"
+          >
+            {PRIORITIES.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {!isSubtask && (
+          <div>
+            <label htmlFor={`${fieldId}-recurrence`} className="field-label">
+              Repetição
+            </label>
+            <select
+              id={`${fieldId}-recurrence`}
+              value={recurrence}
+              onChange={(e) => setRecurrence(e.target.value)}
+              className="field"
             >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-3.5 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors disabled:opacity-50 cursor-pointer"
-            >
-              {loading ? 'Salvar...' : 'Salvar'}
-            </button>
+              {RECURRENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-fg-soft mt-1.5">
+              Uma tarefa que repete volta para “a fazer” quando o intervalo vence, na próxima vez que você abrir
+              o projeto.
+            </p>
           </div>
-        </form>
-      </div>
-    </div>
+        )}
+
+        <ModalActions>
+          <button type="button" onClick={onClose} className="btn btn-quiet btn-lg">
+            Cancelar
+          </button>
+          <button type="submit" disabled={busy} data-busy={busy || undefined} className="btn btn-primary btn-lg">
+            Salvar
+          </button>
+        </ModalActions>
+      </form>
+    </Modal>
   );
 }

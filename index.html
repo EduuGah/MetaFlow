@@ -2,15 +2,71 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- Zoom liberado: `maximum-scale=1, user-scalable=no` impedia ampliar a
+         página no celular, o que reprova o critério 1.4.4 da WCAG. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <title>MetaFlow — metas divididas em tarefas, com progresso calculado</title>
+    <meta
+      name="description"
+      content="O MetaFlow organiza projetos pessoais em tarefas e subtarefas, com prazos, prioridades, repetição e quadro kanban. O progresso vem do que você concluiu, não de uma barra que você arrasta."
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#0f172a" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="theme-color" content="#080b13" />
+    <meta name="color-scheme" content="dark" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="MetaFlow" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <title>MetaFlow</title>
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="MetaFlow" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:title" content="MetaFlow — metas divididas em tarefas, com progresso calculado" />
+    <meta
+      property="og:description"
+      content="Projetos pessoais em tarefas e subtarefas, com prazos, prioridades, repetição e quadro kanban."
+    />
+    <meta property="og:image" content="/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="MetaFlow: o mostrador de progresso e três projetos de exemplo." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="MetaFlow — metas divididas em tarefas, com progresso calculado" />
+    <meta
+      name="twitter:description"
+      content="Projetos pessoais em tarefas e subtarefas, com prazos, prioridades, repetição e quadro kanban."
+    />
+    <meta name="twitter:image" content="/og.png" />
+
+    <!-- Dados estruturados: só campos verificáveis. Sem avaliação, sem preço,
+         sem contagem de usuários — nada disso existe neste projeto. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "MetaFlow",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "pt-BR",
+        "description": "Aplicativo web para organizar projetos pessoais em tarefas e subtarefas, com prazos, prioridades, repetição e quadro kanban."
+      }
+    </script>
   </head>
-  <body class="bg-slate-50 text-slate-800 antialiased">
+  <body>
     <div id="root"></div>
+    <noscript>
+      <div style="max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; font-family: system-ui, sans-serif; color: #e8edf7">
+        <h1 style="font-size: 1.5rem">MetaFlow</h1>
+        <p style="color: #a3adc4">
+          O MetaFlow organiza projetos pessoais em tarefas e subtarefas, com prazos, prioridades e quadro kanban.
+          Para usar o painel é preciso habilitar o JavaScript no navegador.
+        </p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

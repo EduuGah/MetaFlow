@@ -1,0 +1,11 @@
+# As telas autenticadas não têm conteúdo público: manter os buscadores fora
+# delas evita gastar orçamento de rastreamento em páginas que só devolvem
+# a casca da aplicação.
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /dashboard/
+Disallow: /login
+
+# Defina a URL absoluta abaixo quando o domínio de produção estiver definido:
+# Sitemap: https://SEU-DOMINIO/sitemap.xml
