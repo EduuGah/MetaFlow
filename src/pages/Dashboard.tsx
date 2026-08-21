@@ -10,6 +10,7 @@ import { getDeadlineInfo, type DeadlineStatus } from '../lib/deadline';
 import { computeProgress } from '../lib/progress';
 import AppHeader from '../components/AppHeader';
 import DashboardStats from '../components/DashboardStats';
+import DeadlineAlerts from '../components/DeadlineAlerts';
 import ProgressDial from '../components/ProgressDial';
 import ProjectFormModal from '../components/ProjectFormModal';
 import { DEFAULT_CATEGORIES } from '../lib/categories';
@@ -202,6 +203,7 @@ export default function Dashboard() {
           <FirstRun onCreate={openNew} />
         ) : (
           <div className="space-y-4">
+            <DeadlineAlerts projects={projects} />
             <DashboardStats projects={projects} />
 
             <div className="space-y-3">

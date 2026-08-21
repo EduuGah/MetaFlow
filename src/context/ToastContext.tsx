@@ -12,15 +12,22 @@ import { IconAlert, IconClose, IconDone, IconInfo } from '../components/Icon';
 
 export type ToastType = 'success' | 'error' | 'info';
 
+/** Uma ação de resgate no próprio aviso — hoje só "Desfazer". */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface Toast {
   id: string;
   message: string;
   type: ToastType;
+  action?: ToastAction;
   leaving?: boolean;
 }
 
 interface ToastContextData {
-  showToast: (message: string, type?: ToastType) => void;
+  showToast: (message: string, type?: ToastType, action?: ToastAction) => void;
 }
 
 const ToastContext = createContext<ToastContextData | null>(null);
@@ -31,6 +38,13 @@ const DURATION: Record<ToastType, number> = {
   // Erro fica mais tempo: é a única mensagem que exige uma decisão do usuário.
   error: 6000,
 };
+
+/**
+ * Aviso com ação vive mais do que o resto: ele não informa, ele oferece uma
+ * saída. Oito segundos é o tempo de ler "excluída", perceber que foi a linha
+ * errada e alcançar o botão — bem abaixo disso o desfazer vira decoração.
+ */
+const ACTION_DURATION = 8000;
 
 const EXIT_MS = 180;
 
@@ -67,19 +81,26 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 
   const showToast = useCallback(
-    (message: string, type: ToastType = 'success') => {
+    (message: string, type: ToastType = 'success', action?: ToastAction) => {
+      const life = action ? ACTION_DURATION : DURATION[type];
+
       setToasts((prev) => {
-        const twin = prev.find((t) => t.message === message && t.type === type && !t.leaving);
+        // Avisos com ação nunca se fundem: cada exclusão tem o seu próprio
+        // desfazer, e juntar dois deixaria uma tarefa sem volta.
+        const twin = action
+          ? undefined
+          : prev.find((t) => t.message === message && t.type === type && !t.action && !t.leaving);
+
         if (twin) {
           window.clearTimeout(timers.current.get(twin.id));
-          if (!paused.current) schedule(twin.id, DURATION[type]);
+          if (!paused.current) schedule(twin.id, life);
           return prev;
         }
 
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        if (!paused.current) schedule(id, DURATION[type]);
+        if (!paused.current) schedule(id, life);
         // No máximo três de cada vez: além disso vira parede de texto.
-        return [...prev, { id, message, type }].slice(-3);
+        return [...prev, { id, message, type, action }].slice(-3);
       });
     },
     [schedule]
@@ -100,7 +121,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     paused.current = false;
     setToasts((current) => {
       current.forEach((t) => {
-        if (!t.leaving && !timers.current.has(t.id)) schedule(t.id, DURATION[t.type]);
+        if (!t.leaving && !timers.current.has(t.id)) {
+          schedule(t.id, t.action ? ACTION_DURATION : DURATION[t.type]);
+        }
       });
       return current;
     });
@@ -152,6 +175,22 @@ function ToastRow({ toast, onDismiss }: { toast: Toast; onDismiss: () => void })
         <Glyph size={17} />
       </span>
       <p className="text-sm flex-1 min-w-0">{toast.message}</p>
+
+      {/* A ação fica antes do X, na ordem de leitura e de tabulação: quem
+          chega aqui pelo teclado alcança "Desfazer" antes de dispensar. */}
+      {toast.action && (
+        <button
+          type="button"
+          onClick={() => {
+            toast.action?.onClick();
+            onDismiss();
+          }}
+          className="btn btn-secondary btn-sm shrink-0 text-signal"
+        >
+          {toast.action.label}
+        </button>
+      )}
+
       <button type="button" onClick={onDismiss} className="btn-icon h-7 w-7 shrink-0" aria-label="Dispensar aviso">
         <IconClose size={14} />
       </button>

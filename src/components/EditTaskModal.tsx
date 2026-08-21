@@ -27,6 +27,7 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [recurrence, setRecurrence] = useState('none');
+  const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -35,6 +36,7 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
     setTitle(task.title);
     setPriority(task.priority ?? 'medium');
     setRecurrence(task.recurrence ?? 'none');
+    setNotes(task.notes ?? '');
     setError(null);
     setBusy(false);
   }, [open, task]);
@@ -51,6 +53,8 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
       return;
     }
 
+    const cleanNotes = notes.trim();
+
     setBusy(true);
     const { error: updateError } = await supabase
       .from('tasks')
@@ -59,6 +63,9 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
         priority,
         // Subtarefa não repete: quem controla o ciclo é a tarefa principal.
         recurrence: isSubtask ? 'none' : recurrence,
+        // Nota apagada volta a ser `null`, não string vazia: assim a lista
+        // testa um só valor para decidir se mostra o bloco de anotação.
+        notes: cleanNotes ? cleanNotes.slice(0, 2000) : null,
       })
       .eq('id', task.id);
     setBusy(false);
@@ -119,6 +126,21 @@ export default function EditTaskModal({ open, task, onClose, onSaved }: EditTask
               </option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <label htmlFor={`${fieldId}-notes`} className="field-label">
+            Notas <span className="text-fg-soft font-normal">(opcional)</span>
+          </label>
+          <textarea
+            id={`${fieldId}-notes`}
+            value={notes}
+            rows={3}
+            maxLength={2000}
+            placeholder="Links, medidas, o que ficou combinado…"
+            onChange={(e) => setNotes(e.target.value)}
+            className="field resize-y min-h-[5rem]"
+          />
         </div>
 
         {!isSubtask && (

@@ -18,5 +18,9 @@ export interface Task {
   priority?: 'low' | 'medium' | 'high';
   recurrence?: string | null;
   last_completed_at?: string | null;
+  /** Anotação livre da tarefa. Opcional no tipo porque linhas antigas vêm sem ela. */
+  notes?: string | null;
+  /** Ordem manual dentro do projeto. `null` em linha anterior ao backfill. */
+  position?: number | null;
   created_at: string;
 }

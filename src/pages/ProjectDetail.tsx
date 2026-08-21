@@ -6,6 +6,8 @@ import { useToast } from '../context/ToastContext';
 import { useSeo } from '../lib/seo';
 import { reportError, userMessage } from '../lib/logger';
 import { computeProgress } from '../lib/progress';
+import { orderTasks, positionUpdates, swap } from '../lib/order';
+import { descendantsOf } from '../lib/tree';
 import { formatDeadlineLong, getDeadlineInfo } from '../lib/deadline';
 import { findTasksDueForReset, RECURRENCE_OPTIONS } from '../lib/recurrence';
 import AppHeader from '../components/AppHeader';
@@ -88,7 +90,8 @@ export default function ProjectDetail() {
 
     setProject(projectRes.data as Project);
 
-    const fetched = (tasksRes.data ?? []) as Task[];
+    // A consulta vem por data de criação; a ordem que vale é a manual.
+    const fetched = orderTasks((tasksRes.data ?? []) as Task[]);
     const dueForReset = findTasksDueForReset(fetched);
 
     if (dueForReset.length > 0) {
@@ -127,6 +130,16 @@ export default function ProjectDetail() {
 
   /* ---------------- operações ---------------- */
 
+  /**
+   * Próxima posição livre entre as irmãs.
+   *
+   * Sempre um a mais que a maior existente, em vez da contagem da lista: o
+   * backfill do banco numerou a partir de 1 e o app conta a partir de 0, então
+   * contar itens criaria empate com a última linha.
+   */
+  const nextPosition = (parentId: string | null) =>
+    tasks.reduce((max, t) => (t.parent_id === parentId ? Math.max(max, t.position ?? -1) : max), -1) + 1;
+
   const createTask = async (event: React.FormEvent) => {
     event.preventDefault();
     const title = draft.trim();
@@ -149,6 +162,7 @@ export default function ProjectDetail() {
         parent_id: null,
         priority: draftPriority,
         recurrence: draftRecurrence,
+        position: nextPosition(null),
       })
       .select()
       .single();
@@ -160,7 +174,7 @@ export default function ProjectDetail() {
       return;
     }
 
-    setTasks((prev) => [...prev, data as Task]);
+    setTasks((prev) => orderTasks([...prev, data as Task]));
     setDraft('');
     setDraftPriority('medium');
     setDraftRecurrence('none');
@@ -180,6 +194,7 @@ export default function ProjectDetail() {
         parent_id: parentId,
         priority: 'medium',
         recurrence: 'none',
+        position: nextPosition(parentId),
       })
       .select()
       .single();
@@ -190,9 +205,45 @@ export default function ProjectDetail() {
       return false;
     }
 
-    setTasks((prev) => [...prev, data as Task]);
+    setTasks((prev) => orderTasks([...prev, data as Task]));
     setAnnouncement(`Etapa “${title}” adicionada.`);
     return true;
+  };
+
+  /**
+   * Move uma tarefa uma casa para cima ou para baixo entre as suas irmãs.
+   *
+   * A renumeração é da lista inteira, mas só as linhas que realmente mudaram
+   * de número vão para o banco — numa lista já numerada isso são duas. A tela
+   * muda antes da resposta; se o banco recusar, ela volta ao estado anterior.
+   */
+  const moveTask = async (task: Task, direction: -1 | 1) => {
+    const siblings = tasks.filter((t) => t.parent_id === task.parent_id);
+    const from = siblings.findIndex((t) => t.id === task.id);
+    const reordered = swap(siblings, from, from + direction);
+    if (reordered === siblings) return;
+
+    const updates = positionUpdates(reordered);
+    if (updates.length === 0) return;
+
+    const snapshot = tasks;
+    const byId = new Map(updates.map((row) => [row.id, row.position]));
+
+    setTasks((prev) =>
+      orderTasks(prev.map((t) => (byId.has(t.id) ? { ...t, position: byId.get(t.id) as number } : t)))
+    );
+    setAnnouncement(`“${task.title}” agora é a ${from + direction + 1}ª de ${siblings.length}.`);
+
+    const results = await Promise.all(
+      updates.map((row) => supabase.from('tasks').update({ position: row.position }).eq('id', row.id))
+    );
+    const failure = results.find((result) => result.error)?.error;
+
+    if (failure) {
+      reportError('task.reorder', failure, { taskId: task.id });
+      setTasks(snapshot);
+      showToast(userMessage('A nova ordem não foi salva.', failure), 'error');
+    }
   };
 
   /**
@@ -230,12 +281,58 @@ export default function ProjectDetail() {
 
   const toggleTask = (task: Task) => applyStatus(task, task.is_completed ? 'todo' : 'done');
 
+  /**
+   * Recria as linhas excluídas com os mesmos ids.
+   *
+   * Preservar `id` e `created_at` é o que faz a tarefa voltar para o mesmo
+   * lugar da ordenação, com as etapas ainda apontando para ela. A tarefa
+   * principal vai primeiro no array: o Postgres só confere a chave
+   * estrangeira no fim do INSERT, mas a ordem deixa a intenção legível.
+   */
+  const restoreTasks = async (rows: Task[]) => {
+    const payload = rows.map((task) => ({
+      id: task.id,
+      project_id: task.project_id,
+      parent_id: task.parent_id,
+      title: task.title,
+      is_completed: task.is_completed,
+      status: task.status ?? (task.is_completed ? 'done' : 'todo'),
+      priority: task.priority ?? 'medium',
+      recurrence: task.recurrence ?? 'none',
+      last_completed_at: task.last_completed_at ?? null,
+      notes: task.notes ?? null,
+      position: task.position ?? null,
+      created_at: task.created_at,
+    }));
+
+    const { error } = await supabase.from('tasks').insert(payload);
+
+    if (error) {
+      reportError('task.restore', error, { count: payload.length });
+      showToast(userMessage('Não foi possível restaurar.', error), 'error');
+      return;
+    }
+
+    setTasks((prev) => orderTasks([...prev, ...rows]));
+    setAnnouncement(`“${rows[0].title}” foi restaurada.`);
+  };
+
+  /**
+   * Excluir some da tela na hora, mas não é definitivo: o aviso carrega um
+   * "Desfazer" com o conteúdo do que saiu — a tarefa e a sua árvore inteira,
+   * porque apagar o pai leva todos os descendentes por cascata no banco.
+   * `descendantsOf` desce todos os níveis; filtrar por `parent_id` deixaria
+   * um neto órfão na tela e fora do desfazer.
+   */
   const deleteTask = async () => {
     if (!taskToDelete) return;
     const target = taskToDelete;
+    const removedSteps = descendantsOf(tasks, target.id);
+    const removedIds = new Set([target.id, ...removedSteps.map((t) => t.id)]);
     const snapshot = tasks;
 
-    setTasks((prev) => prev.filter((t) => t.id !== target.id && t.parent_id !== target.id));
+    setTasks((prev) => prev.filter((t) => !removedIds.has(t.id)));
+    setTaskToDelete(null);
 
     const { error } = await supabase.from('tasks').delete().eq('id', target.id);
 
@@ -243,15 +340,26 @@ export default function ProjectDetail() {
       reportError('task.delete', error, { taskId: target.id });
       setTasks(snapshot);
       showToast(userMessage('Não foi possível excluir.', error), 'error');
-    } else {
-      showToast(target.parent_id ? 'Etapa excluída.' : 'Tarefa excluída.', 'info');
+      return;
     }
-    setTaskToDelete(null);
+
+    showToast(target.parent_id ? 'Etapa excluída.' : 'Tarefa excluída.', 'info', {
+      label: 'Desfazer',
+      onClick: () => restoreTasks([target, ...removedSteps]),
+    });
   };
 
   /* ---------------- derivados ---------------- */
 
+  /** Filhos diretos — é do que a lista precisa para desenhar um nível de cada vez. */
   const subtasksOf = useCallback((parentId: string) => tasks.filter((t) => t.parent_id === parentId), [tasks]);
+
+  /**
+   * Árvore inteira abaixo de uma tarefa. O quadro é um resumo: ele conta e
+   * lista todas as etapas de uma vez, sem recuo, porque um card de coluna não
+   * tem largura para representar três níveis.
+   */
+  const allStepsOf = useCallback((taskId: string) => descendantsOf(tasks, taskId), [tasks]);
 
   const mainTasks = useMemo(() => tasks.filter((t) => !t.parent_id), [tasks]);
 
@@ -262,9 +370,11 @@ export default function ProjectDetail() {
       if (statusFilter === 'done' && !task.is_completed) return false;
       if (priorityFilter !== 'all' && (task.priority ?? 'medium') !== priorityFilter) return false;
       if (!term) return true;
+      // A busca desce a árvore inteira: achar "tinta" na subetapa tem de
+      // trazer à tona a tarefa de topo que a contém, senão o resultado some.
       return (
         task.title.toLowerCase().includes(term) ||
-        tasks.some((s) => s.parent_id === task.id && s.title.toLowerCase().includes(term))
+        descendantsOf(tasks, task.id).some((step) => step.title.toLowerCase().includes(term))
       );
     });
   }, [mainTasks, tasks, search, statusFilter, priorityFilter]);
@@ -542,15 +652,17 @@ export default function ProjectDetail() {
             <TaskList
               tasks={visibleTasks}
               subtasksOf={subtasksOf}
+              reorderable={!filtersActive}
               onToggle={toggleTask}
               onEdit={setTaskToEdit}
               onDelete={setTaskToDelete}
               onAddSubtask={addSubtask}
+              onReorder={moveTask}
             />
           ) : (
             <TaskBoard
               tasks={visibleTasks}
-              subtasksOf={subtasksOf}
+              stepsOf={allStepsOf}
               onMove={(task, status) => statusOf(task) !== status && applyStatus(task, status)}
               onToggle={toggleTask}
               onEdit={setTaskToEdit}
@@ -585,11 +697,7 @@ export default function ProjectDetail() {
       <ConfirmModal
         open={Boolean(taskToDelete)}
         title={taskToDelete?.parent_id ? 'Excluir etapa' : 'Excluir tarefa'}
-        message={
-          taskToDelete?.parent_id
-            ? `“${taskToDelete?.title}” será removida desta tarefa.`
-            : `“${taskToDelete?.title}” e todas as suas etapas serão removidas. Não dá para desfazer.`
-        }
+        message={deleteMessage(taskToDelete, tasks)}
         confirmText="Excluir"
         onConfirm={deleteTask}
         onClose={() => setTaskToDelete(null)}
@@ -599,6 +707,28 @@ export default function ProjectDetail() {
 }
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * O texto da confirmação de exclusão.
+ *
+ * Duas coisas mudaram e a frase tinha de acompanhar: a exclusão agora desce
+ * por toda a árvore, então o número de etapas afetadas precisa aparecer, e ela
+ * deixou de ser definitiva — prometer "não dá para desfazer" com um botão de
+ * desfazer logo em seguida seria assustar por nada.
+ */
+function deleteMessage(task: Task | null, tasks: Task[]): string {
+  if (!task) return '';
+
+  const steps = descendantsOf(tasks, task.id).length;
+  const scope =
+    steps === 0
+      ? `“${task.title}” sai da lista.`
+      : steps === 1
+        ? `“${task.title}” e a etapa dentro dela saem da lista.`
+        : `“${task.title}” e as ${steps} etapas dentro dela saem da lista.`;
+
+  return `${scope} Dá para desfazer no aviso que aparece em seguida.`;
+}
 
 function ViewButton({
   active,

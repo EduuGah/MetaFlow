@@ -7,12 +7,15 @@ import { BOARD_COLUMNS, statusOf, type BoardStatus } from './board';
 
 interface TaskBoardProps {
   tasks: Task[];
-  subtasksOf: (id: string) => Task[];
+  stepsOf: (id: string) => Task[];
   onMove: (task: Task, status: BoardStatus) => void;
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
   onToggle: (task: Task) => void;
 }
+
+/** Tipo próprio no dataTransfer: impede que o quadro aceite arquivo ou texto solto. */
+const DRAG_TYPE = 'application/x-metaflow-task';
 
 /**
  * Visão em quadro.
@@ -21,8 +24,26 @@ interface TaskBoardProps {
  * 85% da largura — sobra uma fresta da próxima coluna, que é o que avisa ao
  * usuário que existe mais para o lado. Empilhar as três colunas em uma só
  * transformaria o quadro numa lista pior do que a lista.
+ *
+ * Arrastar move o card de coluna, mas é só o atalho do mouse. O seletor no pé
+ * de cada card continua sendo o caminho oficial: é ele que funciona no
+ * celular, onde arrastar não existe, e no teclado, onde arrastar não é
+ * alcançável. Nenhuma ação do quadro depende de segurar o botão do mouse.
  */
-export default function TaskBoard({ tasks, subtasksOf, onMove, onEdit, onDelete, onToggle }: TaskBoardProps) {
+export default function TaskBoard({ tasks, stepsOf, onMove, onEdit, onDelete, onToggle }: TaskBoardProps) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overColumn, setOverColumn] = useState<BoardStatus | null>(null);
+
+  const drop = (event: React.DragEvent, column: BoardStatus) => {
+    event.preventDefault();
+    setOverColumn(null);
+    setDraggingId(null);
+
+    const id = event.dataTransfer.getData(DRAG_TYPE);
+    const task = tasks.find((t) => t.id === id);
+    if (task) onMove(task, column);
+  };
+
   return (
     <div
       className="flex gap-3 overflow-x-auto snap-x snap-mandatory md:grid md:grid-cols-3 md:overflow-visible px-4 sm:px-5 py-4"
@@ -30,11 +51,28 @@ export default function TaskBoard({ tasks, subtasksOf, onMove, onEdit, onDelete,
     >
       {BOARD_COLUMNS.map((column) => {
         const columnTasks = tasks.filter((t) => statusOf(t) === column.id);
+        const isTarget = overColumn === column.id && draggingId !== null;
+
         return (
           <section
             key={column.id}
             aria-label={`${column.label} — ${columnTasks.length} tarefas`}
-            className="snap-start shrink-0 w-[85%] sm:w-[19rem] md:w-auto flex flex-col gap-2.5"
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes(DRAG_TYPE)) return;
+              // Sem o preventDefault o navegador recusa a soltura — é assim
+              // que a API de arrastar diz "esta área aceita o que vem aí".
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              setOverColumn(column.id);
+            }}
+            onDragLeave={(event) => {
+              // Sair para um filho ainda é estar dentro da coluna.
+              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+              setOverColumn((prev) => (prev === column.id ? null : prev));
+            }}
+            onDrop={(event) => drop(event, column.id)}
+            className="snap-start shrink-0 w-[85%] sm:w-[19rem] md:w-auto flex flex-col gap-2.5 rounded-lg transition-colors"
+            style={isTarget ? { background: 'var(--c-signal-soft)', outline: '1px dashed var(--c-signal)' } : undefined}
           >
             <header className="flex items-center justify-between pb-2 border-b" style={{ borderColor: column.tone }}>
               <h3 className="text-sm font-semibold" style={{ color: column.tone }}>
@@ -44,19 +82,33 @@ export default function TaskBoard({ tasks, subtasksOf, onMove, onEdit, onDelete,
             </header>
 
             {columnTasks.length === 0 ? (
-              <p className="text-xs text-fg-soft py-6 text-center">Vazio</p>
+              <p className="text-xs text-fg-soft py-6 text-center">{isTarget ? 'Solte aqui' : 'Vazio'}</p>
             ) : (
               columnTasks.map((task) => (
                 <BoardCard
                   key={task.id}
                   task={task}
-                  subtasks={subtasksOf(task.id)}
+                  subtasks={stepsOf(task.id)}
+                  dragging={draggingId === task.id}
+                  onDragStart={setDraggingId}
+                  onDragEnd={() => {
+                    setDraggingId(null);
+                    setOverColumn(null);
+                  }}
                   onMove={onMove}
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onToggle={onToggle}
                 />
               ))
+            )}
+
+            {/* Uma faixa de sobra no fim da coluna: sem ela, soltar embaixo do
+                último card cairia fora da área que aceita a soltura. */}
+            {isTarget && columnTasks.length > 0 && (
+              <p className="text-2xs text-signal text-center py-3 rounded-md border border-dashed border-signal">
+                Solte aqui
+              </p>
             )}
           </section>
         );
@@ -68,6 +120,9 @@ export default function TaskBoard({ tasks, subtasksOf, onMove, onEdit, onDelete,
 function BoardCard({
   task,
   subtasks,
+  dragging,
+  onDragStart,
+  onDragEnd,
   onMove,
   onEdit,
   onDelete,
@@ -75,16 +130,50 @@ function BoardCard({
 }: {
   task: Task;
   subtasks: Task[];
+  dragging: boolean;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
   onMove: (task: Task, status: BoardStatus) => void;
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
   onToggle: (task: Task) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [grabbable, setGrabbable] = useState(false);
   const progress = computeProgress(subtasks);
 
+  /**
+   * O card só vira arrastável quando o clique começa fora de um controle.
+   *
+   * Com `draggable` fixo em true, o seletor de coluna dentro do card não abre
+   * no Firefox e os botões viram alvo de arrasto em vez de alvo de clique.
+   * Decidir no pointerdown resolve os dois sem tirar o arrasto do card.
+   */
+  const armDrag = (event: React.PointerEvent) => {
+    const origin = event.target as HTMLElement | null;
+    setGrabbable(!origin?.closest('button, select, input, label, a'));
+  };
+
   return (
-    <article className="relative rounded-lg border border-edge p-3.5" style={{ background: 'var(--c-raised)' }}>
+    <article
+      draggable={grabbable}
+      onPointerDown={armDrag}
+      onDragStart={(event) => {
+        event.dataTransfer.setData(DRAG_TYPE, task.id);
+        event.dataTransfer.effectAllowed = 'move';
+        onDragStart(task.id);
+      }}
+      onDragEnd={() => {
+        setGrabbable(false);
+        onDragEnd();
+      }}
+      className="relative rounded-lg border border-edge p-3.5 transition-opacity"
+      style={{
+        background: 'var(--c-raised)',
+        opacity: dragging ? 0.45 : 1,
+        cursor: grabbable ? 'grab' : undefined,
+      }}
+    >
       <div className="flex items-start justify-between gap-2">
         <h4 className={`text-sm font-medium leading-snug ${task.is_completed ? 'line-through text-fg-soft' : ''}`}>
           {task.title}
@@ -104,11 +193,15 @@ function BoardCard({
         </div>
       </div>
 
-      {(task.priority === 'high' || task.priority === 'low' || (task.recurrence && task.recurrence !== 'none')) && (
-        <div className="flex flex-wrap gap-1.5 mt-2.5">
-          <PriorityBadge priority={task.priority} />
-          <RecurrenceBadge recurrence={task.recurrence} />
-        </div>
+      <div className="flex flex-wrap gap-1.5 mt-2.5">
+        <PriorityBadge priority={task.priority} />
+        <RecurrenceBadge recurrence={task.recurrence} />
+      </div>
+
+      {/* Duas linhas de nota no card. O card é um cartão de parede: se a
+          anotação for longa, ela pertence à lista ou ao formulário. */}
+      {task.notes && (
+        <p className="text-xs text-fg-muted mt-2.5 whitespace-pre-line line-clamp-2">{task.notes}</p>
       )}
 
       {subtasks.length > 0 && (

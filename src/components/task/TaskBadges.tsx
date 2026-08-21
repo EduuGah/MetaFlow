@@ -2,13 +2,14 @@ import { RECURRENCE_LABELS } from '../../lib/recurrence';
 import { IconRepeat } from '../Icon';
 
 /**
- * Só a exceção ganha marcação.
+ * Três níveis, três pesos visuais.
  *
- * Prioridade média é o padrão e não recebe selo — se toda tarefa tivesse um,
- * a cor deixaria de significar alguma coisa e a lista viraria um mosaico.
- * Alta puxa a atenção, baixa avisa que pode esperar, o resto fica quieto.
+ * Alta puxa a atenção com coral, média fica no tom de texto normal e baixa
+ * some para o cinza mais apagado. Nenhuma prioridade fica sem selo: quem
+ * define "média" na criação precisa ver que a escolha foi registrada — antes
+ * o selo sumia e parecia que o campo não tinha sido salvo.
  */
-export function PriorityBadge({ priority }: { priority?: string | null }) {
+export function PriorityBadge({ priority, quiet = false }: { priority?: string | null; quiet?: boolean }) {
   if (priority === 'high') {
     return (
       <span
@@ -22,7 +23,13 @@ export function PriorityBadge({ priority }: { priority?: string | null }) {
   if (priority === 'low') {
     return <span className="chip chip-static text-2xs text-fg-soft">Baixa</span>;
   }
-  return null;
+  // Nas linhas aninhadas o padrão fica calado: em três níveis de recuo, um
+  // selo "Média" repetido em cada etapa rouba a largura do próprio título.
+  // Alta e baixa continuam aparecendo em qualquer nível — são exceção.
+  if (quiet) return null;
+
+  // Sem prioridade gravada, a tarefa é média — é o padrão do formulário.
+  return <span className="chip chip-static text-2xs">Média</span>;
 }
 
 export function RecurrenceBadge({ recurrence }: { recurrence?: string | null }) {
