@@ -27,7 +27,7 @@ interface ModalProps {
   /** Frase curta abaixo do título, quando a ação precisa de contexto. */
   description?: string;
   children: ReactNode;
-  size?: 'sm' | 'md';
+  size?: 'sm' | 'md' | 'lg';
 }
 
 export default function Modal({ open, onClose, title, description, children, size = 'md' }: ModalProps) {
@@ -110,7 +110,9 @@ export default function Modal({ open, onClose, title, description, children, siz
         className={cn(
           'panel w-full animate-sheet-in shadow-overlay outline-none',
           'rounded-b-none sm:rounded-b-xl max-h-[92dvh] overflow-y-auto',
-          size === 'sm' ? 'sm:max-w-sm' : 'sm:max-w-md'
+          // `lg` existe para o diálogo de importação: um campo de colar
+          // documento e a prévia da árvore ao lado não cabem em 28rem.
+          size === 'sm' ? 'sm:max-w-sm' : size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-md'
         )}
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >

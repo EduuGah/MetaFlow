@@ -14,6 +14,7 @@ import DashboardStats from '../components/DashboardStats';
 import DeadlineAlerts from '../components/DeadlineAlerts';
 import ProgressDial from '../components/ProgressDial';
 import ProjectFormModal from '../components/ProjectFormModal';
+import ImportProjectModal from '../components/ImportProjectModal';
 import { DEFAULT_CATEGORIES } from '../lib/categories';
 import ConfirmModal from '../components/ConfirmModal';
 import { ProjectRowSkeleton, StatsSkeleton } from '../components/Skeleton';
@@ -54,6 +55,7 @@ export default function Dashboard() {
   const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>('all');
 
   const [formOpen, setFormOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
 
@@ -216,11 +218,18 @@ export default function Dashboard() {
           </div>
 
           {/* A ação principal fica no cabeçalho no desktop; no celular ela
-              vira a barra fixa do rodapé, ao alcance do polegar. */}
-          <button type="button" onClick={openNew} className="btn btn-primary hidden sm:inline-flex shrink-0">
-            <IconPlus size={15} />
-            Novo projeto
-          </button>
+              vira a barra fixa do rodapé, ao alcance do polegar. Importar fica
+              ao lado como ação secundária: é o caminho de quem já tem o plano
+              escrito, não o de quem está começando do zero. */}
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
+            <button type="button" onClick={() => setImportOpen(true)} className="btn btn-secondary">
+              Importar
+            </button>
+            <button type="button" onClick={openNew} className="btn btn-primary">
+              <IconPlus size={15} />
+              Novo projeto
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -334,8 +343,11 @@ export default function Dashboard() {
         className="sm:hidden fixed inset-x-0 bottom-0 z-30 border-t border-edge shadow-dock"
         style={{ background: 'var(--c-panel)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        <div className="px-4 py-3">
-          <button type="button" onClick={openNew} className="btn btn-primary btn-lg w-full">
+        <div className="px-4 py-3 flex gap-2">
+          <button type="button" onClick={() => setImportOpen(true)} className="btn btn-secondary btn-lg shrink-0">
+            Importar
+          </button>
+          <button type="button" onClick={openNew} className="btn btn-primary btn-lg flex-1">
             <IconPlus size={16} />
             Novo projeto
           </button>
@@ -352,6 +364,16 @@ export default function Dashboard() {
             setFormOpen(false);
             setEditing(null);
           }}
+          onSaved={fetchProjects}
+        />
+      )}
+
+      {user && (
+        <ImportProjectModal
+          open={importOpen}
+          userId={user.id}
+          categories={areas}
+          onClose={() => setImportOpen(false)}
           onSaved={fetchProjects}
         />
       )}

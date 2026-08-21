@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { Task } from '../../types';
 import { computeProgress } from '../../lib/progress';
 import { MAX_DEPTH } from '../../lib/tree';
@@ -133,7 +133,7 @@ interface DragBus {
   dragging: Task | null;
   dropAt: { id: string; side: DropSide } | null;
   onDragStartTask: (task: Task) => void;
-  onDragOverTask: (at: { id: string; side: DropSide }) => void;
+  onDragOverTask: (at: { id: string; side: DropSide } | null) => void;
   onDragEndTask: () => void;
   onDropTask: (target: Task, side: DropSide) => void;
 }
@@ -173,6 +173,7 @@ function TaskNode({
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [grabbable, setGrabbable] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
 
   const children = subtasksOf(task.id);
   const progress = computeProgress(children);
@@ -210,6 +211,19 @@ function TaskNode({
 
   const marker = dropAt?.id === task.id && acceptsDrop ? dropAt.side : null;
 
+  /**
+   * De que lado da linha o ponteiro está, medido na hora.
+   *
+   * A conta sai do retângulo da linha, não do `<li>`: o `<li>` de uma tarefa
+   * de topo embrulha também as etapas dela, e o meio dele cairia lá embaixo.
+   * Ponteiro abaixo da linha dá "depois", que é o que se espera.
+   */
+  const sideAt = (clientY: number): DropSide => {
+    const box = rowRef.current?.getBoundingClientRect();
+    if (!box) return 'after';
+    return clientY < box.top + box.height / 2 ? 'before' : 'after';
+  };
+
   // O mesmo truque do quadro: com `draggable` fixo, o clique nos botões e nos
   // campos vira início de arrasto. Decidir no pointerdown resolve os dois.
   const armDrag = (event: React.PointerEvent) => {
@@ -218,16 +232,47 @@ function TaskNode({
   };
 
   return (
-    <li className={cn('relative', isRoot ? 'px-4 sm:px-5 py-4' : 'py-1')}>
+    // Os eventos de arrasto ficam no `<li>`, não na linha de dentro: o `<li>`
+    // da tarefa de topo tem 16px de respiro em cima e embaixo, e com os
+    // eventos na linha essas faixas eram zona morta — soltar ali não fazia
+    // nada. `stopPropagation` garante que o `<li>` mais fundo sob o ponteiro
+    // seja o alvo, e não também o ancestral que o contém.
+    <li
+      className={cn('relative', isRoot ? 'px-4 sm:px-5 py-4' : 'py-1')}
+      onDragOver={(event) => {
+        if (!acceptsDrop) {
+          // Some com o fio quando o ponteiro passa por uma linha que não
+          // aceita: senão ele fica desenhado num lugar que não recebe nada.
+          if (dropAt) onDragOverTask(null);
+          return;
+        }
+        event.stopPropagation();
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        onDragOverTask({ id: task.id, side: sideAt(event.clientY) });
+      }}
+      onDrop={(event) => {
+        if (!acceptsDrop) return;
+        event.stopPropagation();
+        event.preventDefault();
+        // O lado sai da geometria, nunca do estado. `dragover` é evento
+        // contínuo: o React não descarrega o `setState` dele na hora, então
+        // no clique rápido o `marker` ainda podia estar nulo e a soltura
+        // virava um nada silencioso. Era isto que falhava "às vezes".
+        onDropTask(task, sideAt(event.clientY));
+      }}
+    >
       {/* Fio de encaixe: mostra exatamente onde a linha vai parar. Sem ele o
           arrasto é adivinhação, e adivinhação em lista longa é erro. */}
       <DropLine visible={marker === 'before'} side="before" />
 
       <div
+        ref={rowRef}
         className="flex items-start gap-2.5 sm:gap-3 group transition-opacity"
         draggable={grabbable}
         onPointerDown={armDrag}
         onDragStart={(event) => {
+          event.stopPropagation();
           event.dataTransfer.setData(DRAG_TYPE, task.id);
           event.dataTransfer.effectAllowed = 'move';
           onDragStartTask(task);
@@ -235,18 +280,6 @@ function TaskNode({
         onDragEnd={() => {
           setGrabbable(false);
           onDragEndTask();
-        }}
-        onDragOver={(event) => {
-          if (!acceptsDrop) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'move';
-          const box = event.currentTarget.getBoundingClientRect();
-          onDragOverTask({ id: task.id, side: event.clientY < box.top + box.height / 2 ? 'before' : 'after' });
-        }}
-        onDrop={(event) => {
-          if (!acceptsDrop || !marker) return;
-          event.preventDefault();
-          onDropTask(task, marker);
         }}
         style={{
           opacity: dragging?.id === task.id ? 0.4 : 1,
